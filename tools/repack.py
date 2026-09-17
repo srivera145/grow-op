@@ -35,7 +35,7 @@ PLAYER = [
 ]
 PLAYER_BIG = [
     ("big-idle.png",    "little-bud-big-idle",    4, "norm"),
-    ("big-walk.png",    "little-bud-big-walk",    6, "norm"),
+    ("big-walk.png",    "little-bud-big-walk",    5, "norm"),
     ("big-run.png",     "little-bud-big-run",     6, "norm"),
     ("big-jump.png",    "little-bud-big-jump",    4, "strip"),
     ("big-fall.png",    "little-bud-big-fall",    4, "strip"),

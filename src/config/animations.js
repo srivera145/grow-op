@@ -15,10 +15,10 @@ export const SHEET_PATH = 'assets/sheets';
 const LOOP = -1;
 const ONCE = 0;
 
-// The big-form strips (little-bud-big-*.png) had not been exported when this was written. Pending sheets
-// are not requested at all, which keeps the console free of 404s; the big form shows its placeholder
-// until they exist. Set this to false once the files are in public/assets/sheets.
-const BIG_FORM_PENDING = true;
+// Pending sheets are not requested at all, which keeps the console free of failed loads while art is still
+// being made; the form shows its stopgap or placeholder instead. The big-form strips (little-bud-big-*.png)
+// were pending until they were exported; they are in public/assets/sheets now, so this is false.
+const BIG_FORM_PENDING = false;
 
 // Stopgap for the big form while its strips are pending: every big-form state shows one still image, the
 // last frame of little-bud-grow.png, which is the big Little Bud standing. He looks right at rest and
@@ -42,8 +42,15 @@ const PLAYER_STATES = {
   victory: { frames: 4, frameRate: 8, repeat: LOOP },
 };
 
-function playerForm(form, extra = {}) {
-  return Object.fromEntries(Object.entries(PLAYER_STATES).map(([state, def]) => [playerAnim(form, state), { ...def, ...extra }]));
+/**
+ * The animation table entries for one player form. `shared` is merged into every state (flags such as
+ * pending). `perState` overrides individual states where a form's art differs from PLAYER_STATES,
+ * for example { walk: { frames: 5 } }.
+ */
+function playerForm(form, shared = {}, perState = {}) {
+  return Object.fromEntries(
+    Object.entries(PLAYER_STATES).map(([state, def]) => [playerAnim(form, state), { ...def, ...shared, ...perState[state] }]),
+  );
 }
 
 /** Animation key for a player form ('small' | 'big') and state ('idle', 'run', ...). */
@@ -54,7 +61,13 @@ export function playerAnim(form, state) {
 export const ANIMATIONS = {
   // Player
   ...playerForm('small'),
-  ...playerForm('big', { pending: BIG_FORM_PENDING, standIn: BIG_FORM_PENDING && BIG_FORM_STOPGAP ? BIG_FORM_STAND_IN : undefined }),
+  // The big walk cycle is drawn in 5 frames (its strip is 320x88). At the shared 10 fps it cycles a little
+  // faster than the small form's 6, which suits the heavier form, so the rate is deliberately left alone.
+  ...playerForm(
+    'big',
+    { pending: BIG_FORM_PENDING, standIn: BIG_FORM_PENDING && BIG_FORM_STOPGAP ? BIG_FORM_STAND_IN : undefined },
+    { walk: { frames: 5 } },
+  ),
   'little-bud-grow': { frames: 4, frameRate: 4000 / PLAYER.GROW_ANIM_MS, repeat: ONCE }, // small to big, in big-form frames
 
   // Enemies
