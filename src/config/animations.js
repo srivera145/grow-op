@@ -26,7 +26,7 @@ const PLAYER_STATES = {
   walk: { frames: 6, frameRate: 10, repeat: LOOP },
   run: { frames: 6, frameRate: 14, repeat: LOOP },
   jump: { frames: 4, frameRate: 16, repeat: ONCE }, // plays once on takeoff and holds its last frame
-  fall: { frames: 4, frameRate: 12, repeat: ONCE },
+  fall: { frames: 4, frameRate: 12, repeat: LOOP }, // loops, so a long drop keeps moving instead of freezing on its last frame
   land: { frames: 4, frameRate: 4000 / PLAYER.LAND_ANIM_MS, repeat: ONCE }, // all four frames inside the landing window
   attack: { frames: ATTACK.FRAMES, frameRate: 1000 / ATTACK.FRAME_MS, repeat: ONCE }, // frame timing drives the hitbox
   hurt: { frames: 4, frameRate: 4000 / PLAYER.HURT_ANIM_MS, repeat: ONCE },

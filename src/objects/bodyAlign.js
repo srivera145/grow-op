@@ -37,5 +37,9 @@ export function alignBodyToFrame(sprite, size, anchor = 'bottom', live = false) 
       point.y += dy;
     }
     body.updateCenter();
+  } else {
+    // Not in play yet (just created, or asleep with its body disabled): nothing else will refresh the
+    // body's position until a physics step runs for it, so place it from the sprite right now.
+    body.updateFromGameObject();
   }
 }

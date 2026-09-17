@@ -12,7 +12,6 @@ export const TILE_SIZE = 32;
 export const TEXTURES = {
   PLAYER: 'player',
   PLAYER_BIG: 'player-big',
-  TILE_SOIL: 'tile-soil',
   WATER_DROP: 'water-drop',
   LIGHT_ORB: 'light-orb',
   NUTRIENT: 'nutrient',
@@ -23,11 +22,41 @@ export const TEXTURES = {
   ROOT_ROT_MINI: 'root-rot-mini',
 };
 
-// Levels are Tiled JSON maps served from public/levels. `tileset` is the tileset name
-// inside the map file; it is drawn with the texture that has the same key. `next` is the
-// level the grade screen's Next button opens; with one level it loops back to itself.
+// Tilesets, keyed by the name used inside the Tiled maps. The texture key is the same string.
+// firstGid and tileCount give the gid range the tileset owns; the ground collides on that whole range,
+// never on one specific gid. 'edges3x3' is a 3x3 edge set laid out top-left, top, top-right / left, centre,
+// right / bottom-left, bottom, bottom-right, which is what tools/autotile.mjs writes into the ground layer.
+export const TILESETS = {
+  // backing: tiles-soil.png is drawn slightly short of its 32px cells (the last two pixel rows and the
+  // corners of every tile are transparent), so the background shows through between tiles. GameScene paints
+  // this colour, the tile's own outline, behind the ground, keeping `inset` px clear of any side that faces
+  // open air so the grass edge stays see-through. The joins between two soil tiles get a thin strip that only
+  // keeps `seamInset` px clear, because the gap runs right out under the grass there.
+  // Delete `backing` once the tiles are re-exported to fill their cells.
+  'tiles-soil': { file: 'assets/tiles/tiles-soil.png', firstGid: 1, tileCount: 9, columns: 3, layout: 'edges3x3', backing: { color: 0x220e0c, inset: 14, seamInset: 4 } },
+  // Loaded and ready, but no level uses these yet.
+  'tiles-pot': { file: 'assets/tiles/tiles-pot.png', tileCount: 3, columns: 3 },
+  'tiles-stone': { file: 'assets/tiles/tiles-stone.png', tileCount: 3, columns: 3 },
+  'tiles-tent-floor': { file: 'assets/tiles/tiles-tent-floor.png', tileCount: 3, columns: 3 },
+};
+
+// Interface images. hud-icons is a strip of 16x16 frames; FRAME names which frame shows what.
+export const UI = {
+  LOGO: { key: 'logo-growop', file: 'assets/ui/logo-growop.png', maxWidthFraction: 0.7 },
+  HUD_ICONS: {
+    key: 'hud-icons',
+    file: 'assets/sheets/hud-icons.png',
+    frameSize: 16,
+    scale: 2,
+    FRAME: { DROPS: 0, LIVES: 1, SCORE: 2, TIME: 3, WORLD: 4 },
+  },
+};
+
+// Levels are Tiled JSON maps served from public/levels. `tileset` names an entry in TILESETS and the
+// tileset block inside the map. `label` is the short form shown beside the HUD's world icon. `next` is
+// the level the grade screen's Next button opens; with one level it loops back to itself.
 export const LEVELS = {
-  'world1-1': { key: 'world1-1', name: 'World 1-1', file: 'levels/world1-1.json', tileset: 'tile-soil', next: 'world1-1' },
+  'world1-1': { key: 'world1-1', name: 'World 1-1', label: '1-1', file: 'levels/world1-1.json', tileset: 'tiles-soil', next: 'world1-1' },
 };
 export const FIRST_LEVEL = 'world1-1';
 
@@ -48,9 +77,10 @@ export const PLAYER = {
   COYOTE_TIME_MS: 100, // a jump is still allowed this long after walking off a ledge
   JUMP_BUFFER_MS: 120, // a jump pressed this long before landing fires on landing
 
-  // Physics bodies. The art is drawn with its feet on the bottom edge of the frame, so each body is
-  // centred horizontally and pinned to the bottom of whatever frame is showing.
-  BODY: { small: { width: 22, height: 30 }, big: { width: 22, height: 44 } },
+  // Physics bodies, measured off the art: from the feet up to the top of the head, not counting the
+  // sprout. The art is drawn with its feet on the bottom edge of the frame, so each body is centred
+  // horizontally and pinned to the bottom of whatever frame is showing.
+  BODY: { small: { width: 26, height: 36 }, big: { width: 26, height: 46 } },
 
   // Animation switching
   IDLE_SPEED: 12, // below this horizontal speed the player counts as standing still
@@ -82,6 +112,13 @@ export const ATTACK = {
 };
 
 export const PICKUPS = {
+  // Hitboxes. The goal jar's is measured off its art and stands on the ground; the rest are centred.
+  BODY: {
+    'water-drop': { width: 16, height: 16 },
+    'light-orb': { width: 24, height: 24 },
+    nutrient: { width: 24, height: 24 },
+    'goal-jar': { width: 44, height: 74 },
+  },
   WATER_DROP_SCORE: 10,
   DROPS_PER_LIFE: 100, // every 100 drops is traded for an extra life
   LIGHT_ORB_SCORE: 100,
@@ -98,12 +135,12 @@ export const CAMERA = {
 export const ENEMIES = {
   ACTIVATION_SCREENS: 1, // enemies sleep until they are within this many screen widths of the camera view
   STOMP_SCORE: 100,
-  STOMP_TOLERANCE: 8, // how far below an enemy's head the player's feet may have been last frame and still stomp
+  STOMP_TOLERANCE: 12, // how far below an enemy's head the player's feet may have been last frame and still stomp
   SPAWN_GRACE_MS: 350, // freshly split blobs cannot touch the player for this long
   DESPAWN_MARGIN: 96, // enemies that fall this far below the map are removed
-  SPIDER_MITE: { SPEED: 60, BODY: { width: 32, height: 24 } },
-  FUNGUS_GNAT: { SPEED: 70, AMPLITUDE: 40, PERIOD_MS: 1600, RANGE: 96, BODY: { width: 24, height: 24 } }, // sine flight, patrolling RANGE px either side of its spawn point
-  ROOT_ROT: { SPEED: 28, SMALL_SPEED: 55, SPLIT_HOP_VELOCITY: -220, SPLIT_OFFSET: 10, BODY: { width: 32, height: 32 }, SMALL_BODY: { width: 20, height: 20 } },
+  SPIDER_MITE: { SPEED: 60, BODY: { width: 34, height: 26 } },
+  FUNGUS_GNAT: { SPEED: 70, AMPLITUDE: 40, PERIOD_MS: 1600, RANGE: 96, BODY: { width: 28, height: 24 } }, // sine flight, patrolling RANGE px either side of its spawn point
+  ROOT_ROT: { SPEED: 28, SMALL_SPEED: 55, SPLIT_HOP_VELOCITY: -220, SPLIT_OFFSET: 10, BODY: { width: 36, height: 28 }, SMALL_BODY: { width: 22, height: 18 } },
 };
 
 // Harvest grades, best first. A score earns the first grade whose minimum it reaches.

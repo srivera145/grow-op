@@ -5,7 +5,7 @@ import SpiderMite from '../objects/enemies/SpiderMite.js';
 import FungusGnat from '../objects/enemies/FungusGnat.js';
 import RootRot from '../objects/enemies/RootRot.js';
 import ParallaxBackground from '../objects/ParallaxBackground.js';
-import { ATTACK, CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, RULES, TEXTURES } from '../config/constants.js';
+import { ATTACK, CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, PLAYER, RULES, TILESETS, TILE_SIZE } from '../config/constants.js';
 
 // Enemy classes by the object name used in the Tiled "objects" layer.
 const ENEMY_TYPES = {
@@ -17,6 +17,22 @@ const ENEMY_TYPES = {
 /** Centre of a Tiled object. Rectangles are anchored top-left; points have no size. */
 function objectCentre(obj) {
   return { x: obj.x + (obj.width || 0) / 2, y: obj.y + (obj.height || 0) / 2 };
+}
+
+/**
+ * Where a Tiled object meets the ground: the bottom edge of a rectangle, or of the tile cell a point
+ * sits in. Things that stand on the ground are placed from this line, so a change of body size can
+ * never sink them into the floor or leave them hovering.
+ */
+function objectGroundY(obj) {
+  return obj.height ? obj.y + obj.height : Math.ceil(obj.y / TILE_SIZE) * TILE_SIZE;
+}
+
+/** Moves a sprite whose position is its body centre so that the body's bottom edge rests on groundY. */
+function standOn(sprite, body, groundY) {
+  sprite.y = groundY - body.height / 2;
+  sprite.body.updateFromGameObject(); // sleeping bodies are not refreshed by the physics step
+  return sprite;
 }
 
 /**
@@ -37,7 +53,7 @@ export default class GameScene extends Phaser.Scene {
     if (data.reset !== false) {
       this.registry.set({ score: 0, drops: 0, lives: RULES.START_LIVES });
     }
-    this.registry.set('world', this.level.name);
+    this.registry.set({ world: this.level.name, worldLabel: this.level.label, time: 0 });
   }
 
   preload() {
@@ -49,9 +65,13 @@ export default class GameScene extends Phaser.Scene {
 
     // Ground
     this.map = this.make.tilemap({ key: this.level.key });
-    const tileset = this.map.addTilesetImage(this.level.tileset, TEXTURES.TILE_SOIL);
+    // The tileset's name in the map, its entry in TILESETS and its texture key are all the same string.
+    const tilesetDef = TILESETS[this.level.tileset];
+    const tileset = this.map.addTilesetImage(this.level.tileset, this.level.tileset);
     this.groundLayer = this.map.createLayer('ground', tileset, 0, 0);
-    this.groundLayer.setCollisionByExclusion([-1]);
+    // Every gid the tileset owns is solid, whichever edge piece it is. Only gid 0 is empty.
+    this.groundLayer.setCollisionBetween(tilesetDef.firstGid, tilesetDef.firstGid + tilesetDef.tileCount - 1);
+    this.addGroundBacking(tilesetDef.backing);
 
     // The world is the map, open at the bottom so gaps drop things out of it.
     const { widthInPixels, heightInPixels } = this.map;
@@ -74,6 +94,39 @@ export default class GameScene extends Phaser.Scene {
     this.scene.run('HUDScene');
   }
 
+  /**
+   * Fills the hairline gaps that a tileset leaves between neighbouring tiles when its art stops short of
+   * the cell edges (see TILESETS). A flat colour goes behind every solid tile, pulled in from whichever
+   * sides face open air, so only soil-against-soil joins are backed and outward edges keep their shape.
+   * Like the autotiler, it treats cells outside the map as solid.
+   */
+  addGroundBacking(backing) {
+    if (!backing) return;
+
+    const layer = this.groundLayer;
+    const { width, height } = layer.layer;
+    const solid = (col, row) => col < 0 || row < 0 || col >= width || row >= height || layer.getTileAt(col, row) !== null;
+    const graphics = this.add.graphics().setDepth(layer.depth - 1);
+    graphics.fillStyle(backing.color, 1);
+
+    layer.forEachTile((tile) => {
+      const left = solid(tile.x - 1, tile.y) ? 0 : backing.inset;
+      const right = solid(tile.x + 1, tile.y) ? 0 : backing.inset;
+      const top = solid(tile.x, tile.y - 1) ? 0 : backing.inset;
+      const bottom = solid(tile.x, tile.y + 1) ? 0 : backing.inset;
+      graphics.fillRect(tile.pixelX + left, tile.pixelY + top, TILE_SIZE - left - right, TILE_SIZE - top - bottom);
+
+      // Thin strips along the joins themselves, reaching further out under the grass than the main fill.
+      const seam = (open) => (open ? backing.seamInset : 0);
+      if (bottom === 0) {
+        graphics.fillRect(tile.pixelX + seam(left), tile.pixelY + TILE_SIZE - 3, TILE_SIZE - seam(left) - seam(right), 4);
+      }
+      if (right === 0) {
+        graphics.fillRect(tile.pixelX + TILE_SIZE - 2, tile.pixelY + seam(top), 4, TILE_SIZE - seam(top) - seam(bottom));
+      }
+    }, this, 0, 0, width, height, { isNotEmpty: true });
+  }
+
   /** Creates game objects from the Tiled object layer, matching on each object's name. */
   spawnObjects(layer) {
     this.pickups = this.add.group();
@@ -82,12 +135,16 @@ export default class GameScene extends Phaser.Scene {
 
     for (const obj of layer?.objects ?? []) {
       const { x, y } = objectCentre(obj);
+      const groundY = objectGroundY(obj);
       if (obj.name === 'player-start') {
-        this.playerStart = { x, y };
+        this.playerStart = { x, y: groundY - PLAYER.BODY.small.height / 2 };
       } else if (obj.name in PICKUP_KINDS) {
-        this.pickups.add(new Pickup(this, x, y, obj.name));
+        const pickup = new Pickup(this, x, y, obj.name);
+        if (pickup.def.anchor === 'bottom') standOn(pickup, pickup.def.body, groundY);
+        this.pickups.add(pickup);
       } else if (obj.name in ENEMY_TYPES) {
-        this.spawnEnemy(obj.name, x, y);
+        const enemy = this.spawnEnemy(obj.name, x, y);
+        if (enemy.art.anchor === 'bottom') standOn(enemy, enemy.art.body, groundY);
       } else {
         console.warn(`Level ${this.level.key}: no spawn rule for object "${obj.name}"`);
       }
@@ -107,6 +164,12 @@ export default class GameScene extends Phaser.Scene {
   update(time, delta) {
     this.player.update(time, delta);
     this.background.update();
+
+    // The HUD clock: whole seconds since the level started, frozen once the goal is reached.
+    if (this.state !== 'complete') {
+      const seconds = Math.floor((this.time.now - this.levelStartTime) / 1000);
+      if (seconds !== this.registry.get('time')) this.registry.set('time', seconds);
+    }
 
     const fellOut = this.player.y > this.map.heightInPixels + RULES.FALL_DEATH_MARGIN;
     if (this.state === 'playing' && fellOut) {

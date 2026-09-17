@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { PARALLAX, TEXTURES, TILE_SIZE } from '../config/constants.js';
+import { PARALLAX, TEXTURES, TILESETS, TILE_SIZE, UI } from '../config/constants.js';
 import { ANIMATIONS, SHEET_PATH, createAnimations } from '../config/animations.js';
 
 /**
@@ -8,6 +8,10 @@ import { ANIMATIONS, SHEET_PATH, createAnimations } from '../config/animations.j
  * Placeholder textures are always generated, and every sprite in the game is created with one. Real art
  * comes in as animation strips; a strip that is missing or fails to load just means that animation does
  * not exist, so the sprite keeps its placeholder. Nothing downstream needs to know which case it is in.
+ *
+ * Still images follow the same idea in the way that suits each: a missing edge tileset gets a generated
+ * stand-in under the same key, a missing background layer is skipped, and the HUD and title screen fall
+ * back to plain text when their images are not there.
  */
 export default class BootScene extends Phaser.Scene {
   constructor() {
@@ -26,6 +30,12 @@ export default class BootScene extends Phaser.Scene {
     for (const layer of PARALLAX) {
       this.load.image(layer.key, `assets/bg/${layer.key}.png`);
     }
+    for (const [key, def] of Object.entries(TILESETS)) {
+      this.load.image(key, def.file);
+    }
+    this.load.image(UI.LOGO.key, UI.LOGO.file);
+    const icons = UI.HUD_ICONS;
+    this.load.spritesheet(icons.key, icons.file, { frameWidth: icons.frameSize, frameHeight: icons.frameSize });
   }
 
   create() {
@@ -41,7 +51,6 @@ export default class BootScene extends Phaser.Scene {
     const T = TEXTURES;
     this.makePlaceholder(T.PLAYER, 32, 32, 0x4cd137, 0x2f8f22);
     this.makePlaceholder(T.PLAYER_BIG, 32, 48, 0x4cd137, 0x2f8f22);
-    this.makePlaceholder(T.TILE_SOIL, TILE_SIZE, TILE_SIZE, 0x6b4226, 0x4a2c18);
     this.makePlaceholder(T.WATER_DROP, 16, 16, 0x4cc9f0, 0x2a7fb8, { shape: 'circle' });
     this.makePlaceholder(T.LIGHT_ORB, 24, 24, 0xffd60a, 0xc79a00, { shape: 'circle' });
     this.makePlaceholder(T.NUTRIENT, 24, 24, 0x9d4edd, 0x6a2ba8, { shape: 'circle' });
@@ -50,6 +59,41 @@ export default class BootScene extends Phaser.Scene {
     this.makePlaceholder(T.FUNGUS_GNAT, 24, 24, 0x9aa0a6, 0x5f6368, { shape: 'circle' });
     this.makePlaceholder(T.ROOT_ROT, 32, 32, 0x31572c, 0x1b3318, { shape: 'circle' });
     this.makePlaceholder(T.ROOT_ROT_MINI, 20, 20, 0x31572c, 0x1b3318, { shape: 'circle' });
+
+    for (const [key, def] of Object.entries(TILESETS)) {
+      if (def.layout === 'edges3x3' && !this.textures.exists(key)) {
+        this.makeEdgeTilesetPlaceholder(key);
+      }
+    }
+  }
+
+  /**
+   * Stand-in for a missing 3x3 edge tileset, in the same layout as the real one: plain soil tiles with a
+   * green strip on whichever sides face outward, so autotiled corners and edges still read correctly.
+   */
+  makeEdgeTilesetPlaceholder(key) {
+    const size = TILE_SIZE;
+    const strip = 5;
+    const g = this.make.graphics({ add: false });
+
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        const x = col * size;
+        const y = row * size;
+        g.fillStyle(0x4a2c18, 1);
+        g.fillRect(x, y, size, size);
+        g.fillStyle(0x6b4226, 1);
+        g.fillRect(x + 1, y + 1, size - 2, size - 2);
+
+        g.fillStyle(0x4c9a2a, 1);
+        if (row === 0) g.fillRect(x, y, size, strip);
+        if (row === 2) g.fillRect(x, y + size - strip, size, strip);
+        if (col === 0) g.fillRect(x, y, strip, size);
+        if (col === 2) g.fillRect(x + size - strip, y, strip, size);
+      }
+    }
+    g.generateTexture(key, size * 3, size * 3);
+    g.destroy();
   }
 
   /**

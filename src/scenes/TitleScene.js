@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
-import { FIRST_LEVEL, GAME_HEIGHT, GAME_WIDTH } from '../config/constants.js';
+import { FIRST_LEVEL, GAME_HEIGHT, GAME_WIDTH, UI } from '../config/constants.js';
 
 const FONT = { fontFamily: 'monospace', color: '#ffffff', stroke: '#000000', strokeThickness: 4 };
+const PROMPT_Y = 430;
 
-/** Placeholder title screen. The game boots here and comes back here after a game over. */
+/** Title screen. The game boots here and comes back here after a game over. */
 export default class TitleScene extends Phaser.Scene {
   constructor() {
     super('TitleScene');
@@ -14,10 +15,18 @@ export default class TitleScene extends Phaser.Scene {
     this.starting = false;
     this.cameras.main.setBackgroundColor('#101a13');
 
-    this.add.text(centreX, 190, 'GROW OP', { ...FONT, fontSize: '72px', color: '#4cd137', strokeThickness: 8 }).setOrigin(0.5);
-    this.add.text(centreX, 258, 'Germination to Cure', { ...FONT, fontSize: '18px', color: '#d8f3dc' }).setOrigin(0.5);
+    if (this.textures.exists(UI.LOGO.key)) {
+      // Centred in the space above the prompt, shrunk if needed to stay within its share of the width.
+      // Never enlarged: scaling pixel art up by a fraction smears it.
+      this.logo = this.add.image(centreX, PROMPT_Y / 2, UI.LOGO.key);
+      this.logo.setScale(Math.min(1, (GAME_WIDTH * UI.LOGO.maxWidthFraction) / this.logo.width, (PROMPT_Y - 60) / this.logo.height));
+    } else {
+      // No logo image: the text title stands in for it.
+      this.add.text(centreX, 190, 'GROW OP', { ...FONT, fontSize: '72px', color: '#4cd137', strokeThickness: 8 }).setOrigin(0.5);
+      this.add.text(centreX, 258, 'Germination to Cure', { ...FONT, fontSize: '18px', color: '#d8f3dc' }).setOrigin(0.5);
+    }
 
-    const prompt = this.add.text(centreX, 360, 'Press Space or Enter to start', { ...FONT, fontSize: '20px' }).setOrigin(0.5);
+    const prompt = this.add.text(centreX, PROMPT_Y, 'Press Space or Enter to start', { ...FONT, fontSize: '20px' }).setOrigin(0.5);
     this.tweens.add({ targets: prompt, alpha: 0.25, duration: 650, yoyo: true, repeat: -1 });
 
     this.add.text(centreX, GAME_HEIGHT - 24, 'EchoDial LLC', { ...FONT, fontSize: '12px' }).setOrigin(0.5).setAlpha(0.6);

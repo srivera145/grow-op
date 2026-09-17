@@ -1,15 +1,15 @@
 import Phaser from 'phaser';
-import { TEXTURES } from '../config/constants.js';
+import { PICKUPS, TEXTURES } from '../config/constants.js';
 import { alignBodyToFrame } from './bodyAlign.js';
 
 // Pickup kinds are named after the objects in the Tiled "objects" layer.
-// texture: placeholder shown when the art is missing. idle: looping animation. body: fixed hitbox size
-// (the placeholder's size). anchor: where that hitbox sits in the art frame.
+// texture: placeholder shown when the art is missing. idle: looping animation. body: fixed hitbox size,
+// from PICKUPS.BODY. anchor: where that hitbox sits in the art frame ('bottom' also means it stands on the ground).
 export const PICKUP_KINDS = {
-  'water-drop': { texture: TEXTURES.WATER_DROP, idle: 'water-drop-idle', body: { width: 16, height: 16 }, anchor: 'center' },
-  'light-orb': { texture: TEXTURES.LIGHT_ORB, idle: 'light-orb-idle', body: { width: 24, height: 24 }, anchor: 'center' },
-  nutrient: { texture: TEXTURES.NUTRIENT, idle: 'nutrient-idle', body: { width: 24, height: 24 }, anchor: 'center' },
-  'goal-jar': { texture: TEXTURES.GOAL_JAR, idle: 'goal-jar-idle', close: 'goal-jar-close', body: { width: 32, height: 64 }, anchor: 'bottom', still: true },
+  'water-drop': { texture: TEXTURES.WATER_DROP, idle: 'water-drop-idle', body: PICKUPS.BODY['water-drop'], anchor: 'center' },
+  'light-orb': { texture: TEXTURES.LIGHT_ORB, idle: 'light-orb-idle', body: PICKUPS.BODY['light-orb'], anchor: 'center' },
+  nutrient: { texture: TEXTURES.NUTRIENT, idle: 'nutrient-idle', body: PICKUPS.BODY.nutrient, anchor: 'center' },
+  'goal-jar': { texture: TEXTURES.GOAL_JAR, idle: 'goal-jar-idle', close: 'goal-jar-close', body: PICKUPS.BODY['goal-jar'], anchor: 'bottom', still: true },
 };
 
 /**
