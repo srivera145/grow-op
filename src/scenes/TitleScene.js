@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { FIRST_LEVEL, GAME_HEIGHT, GAME_WIDTH, TOUCH, UI } from '../config/constants.js';
 import { isHandheld, touchControlsWanted } from '../input/TouchSource.js';
 import { ensureRotateGuard } from './RotateScene.js';
+import Sfx from '../audio/Sfx.js';
+import { addMuteButton } from '../audio/muteButton.js';
 
 const FONT = { fontFamily: 'monospace', color: '#ffffff', stroke: '#000000', strokeThickness: 4 };
 const PROMPT_Y = 430;
@@ -34,11 +36,17 @@ export default class TitleScene extends Phaser.Scene {
     this.tweens.add({ targets: prompt, alpha: 0.25, duration: 650, yoyo: true, repeat: -1 });
 
     this.add.text(centreX, GAME_HEIGHT - 24, 'EchoDial LLC', { ...FONT, fontSize: '12px' }).setOrigin(0.5).setAlpha(0.6);
+    addMuteButton(this, GAME_WIDTH - 32, 32);
 
+    // The first tap or key press anywhere here is what lets the browser play audio at all; the title music
+    // starts at that moment. Escape is the one key browsers do not count as a gesture.
+    Sfx.playMusic('title');
+    this.input.keyboard.on('keydown', (event) => event.key !== 'Escape' && Sfx.unlock());
     // event.repeat filters out a key that is still held down from the previous scene.
     this.input.keyboard.on('keydown-SPACE', (event) => !event.repeat && this.startGame());
     this.input.keyboard.on('keydown-ENTER', (event) => !event.repeat && this.startGame());
     this.input.on('pointerup', () => {
+      Sfx.unlock();
       this.enterFullscreenOnHandheld();
       this.startGame();
     });
@@ -80,6 +88,9 @@ export default class TitleScene extends Phaser.Scene {
   startGame() {
     if (this.starting) return;
     this.starting = true;
+    Sfx.stopMusic(); // the level's own track takes over once it is built
+    Sfx.unlock(); // the start press may itself be the first gesture
+    Sfx.play('menu-select');
     this.scene.start('GameScene', { level: FIRST_LEVEL, reset: true });
   }
 }

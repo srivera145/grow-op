@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { FIRST_LEVEL, GAME_WIDTH, GRADES, LEVELS } from '../config/constants.js';
+import Sfx from '../audio/Sfx.js';
+import { addMuteButton } from '../audio/muteButton.js';
 
 /** The harvest grade a final score earns. GRADES is ordered best first. */
 export function gradeForScore(score) {
@@ -58,6 +60,7 @@ export default class LevelCompleteScene extends Phaser.Scene {
 
     this.replayButton = this.addButton(centreX - 110, 450, 'Replay', () => this.replay());
     this.nextButton = this.addButton(centreX + 110, 450, 'Next', () => this.next());
+    addMuteButton(this, GAME_WIDTH - 32, 32);
     this.add.text(centreX, 500, 'R to replay    N or Enter for next', { ...FONT, fontSize: '12px' }).setOrigin(0.5).setAlpha(0.6);
 
     this.time.delayedCall(INPUT_DELAY_MS, () => {
@@ -87,12 +90,14 @@ export default class LevelCompleteScene extends Phaser.Scene {
   replay() {
     if (this.leaving) return;
     this.leaving = true;
+    Sfx.play('menu-select');
     this.scene.start('GameScene', { level: this.result.level, reset: true });
   }
 
   next() {
     if (this.leaving) return;
     this.leaving = true;
+    Sfx.play('menu-select');
     const level = LEVELS[this.result.level] ?? LEVELS[FIRST_LEVEL];
     this.scene.start('GameScene', { level: level.next ?? FIRST_LEVEL, reset: false });
   }

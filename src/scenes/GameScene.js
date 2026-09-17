@@ -8,6 +8,7 @@ import ParallaxBackground from '../objects/ParallaxBackground.js';
 import { ensureRotateGuard } from './RotateScene.js';
 import { touchControlsWanted } from '../input/TouchSource.js';
 import { ATTACK, CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, PLAYER, RULES, TILESETS, TILE_SIZE } from '../config/constants.js';
+import Sfx from '../audio/Sfx.js';
 
 // Enemy classes by the object name used in the Tiled "objects" layer.
 const ENEMY_TYPES = {
@@ -94,6 +95,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.levelStartTime = this.time.now;
     this.scene.run('HUDScene');
+    Sfx.playMusic('level'); // keeps going through the grade screen and a replay
 
     // Touch devices: on-screen buttons while the level is in play, and the portrait guard.
     this.touchControlsShown = false;
@@ -240,6 +242,7 @@ export default class GameScene extends Phaser.Scene {
     }
 
     if (enemy.stompable && this.isStomp(player, enemy)) {
+      Sfx.play('stomp');
       enemy.stomp(player);
       player.bounce();
       this.registry.inc('score', ENEMIES.STOMP_SCORE);
@@ -252,6 +255,7 @@ export default class GameScene extends Phaser.Scene {
   /** The leaf slash kills the enemies marked slashable and passes harmlessly through the rest. */
   onSlashHit(zone, enemy) {
     if (this.state !== 'playing' || !enemy.slashable || !enemy.canTouch()) return;
+    Sfx.play('slash-hit');
     enemy.defeat('knockout');
     this.registry.inc('score', ATTACK.SCORE);
   }
@@ -313,6 +317,7 @@ export default class GameScene extends Phaser.Scene {
     this.registry.inc('lives', -1);
 
     if (this.registry.get('lives') <= 0) {
+      Sfx.play('game-over'); // the sting stands in for the death jingle on the last life
       this.announce('GAME OVER', RULES.GAME_OVER_DELAY_MS);
       this.time.delayedCall(RULES.GAME_OVER_DELAY_MS, () => {
         this.scene.stop('HUDScene');
@@ -321,6 +326,7 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
 
+    Sfx.play('die');
     this.time.delayedCall(RULES.RESPAWN_DELAY_MS, () => {
       this.player.respawn(this.playerStart.x, this.playerStart.y);
       this.cameras.main.centerOn(this.playerStart.x, this.playerStart.y);
@@ -340,6 +346,7 @@ export default class GameScene extends Phaser.Scene {
     player.celebrate();
     this.registry.inc('score', PICKUPS.GOAL_SCORE);
     this.announce('STAGE CLEAR!', 2000);
+    Sfx.play('level-complete');
 
     // Positions are body centres, and bodies keep their size whatever art is showing.
     const hopY = jar.body.top - player.body.height / 2 - 24; // feet clear of the lid, which sits above the jar's body

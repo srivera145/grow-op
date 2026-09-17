@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { PARALLAX, TEXTURES, TILESETS, TILE_SIZE, UI } from '../config/constants.js';
 import { ANIMATIONS, SHEET_PATH, createAnimations } from '../config/animations.js';
+import Sfx from '../audio/Sfx.js';
 
 /**
  * Loads the art and prepares everything that depends on it.
@@ -12,10 +13,17 @@ import { ANIMATIONS, SHEET_PATH, createAnimations } from '../config/animations.j
  * Still images follow the same idea in the way that suits each: a missing edge tileset gets a generated
  * stand-in under the same key, a missing background layer is skipped, and the HUD and title screen fall
  * back to plain text when their images are not there.
+ *
+ * Audio works the same way: every sound is requested in each shipped format, and one whose file did not
+ * load is silent (see Sfx).
  */
 export default class BootScene extends Phaser.Scene {
   constructor() {
     super('BootScene');
+  }
+
+  init() {
+    Sfx.init(this.game); // applies the saved mute state before anything can play
   }
 
   preload() {
@@ -43,6 +51,11 @@ export default class BootScene extends Phaser.Scene {
     request(UI.LOGO.key);
     this.load.image(UI.HUD_ICONS.key, UI.HUD_ICONS.file); // cut into one frame per icon in sliceHudIcons()
     request(UI.HUD_ICONS.key);
+
+    // Each sound comes with a URL per format; the loader fetches the first one this browser can play.
+    for (const { key, urls } of Sfx.files()) {
+      this.load.audio(key, urls);
+    }
   }
 
   create() {
@@ -54,6 +67,7 @@ export default class BootScene extends Phaser.Scene {
     this.sliceHudIcons();
     createAnimations(this);
     this.reportArt();
+    this.reportAudio();
 
     this.scene.start('TitleScene');
   }
@@ -194,6 +208,15 @@ export default class BootScene extends Phaser.Scene {
     console.info(`[boot] art: ${loaded} of ${sheets.length} animation sheets loaded, ${pending.length} marked pending`);
     if (this.missing.length > 0) {
       console.warn(`[boot] missing art, placeholders will be used instead: ${this.missing.join(', ')}`);
+    }
+  }
+
+  reportAudio() {
+    const wanted = Sfx.files().map((file) => file.key);
+    const missing = wanted.filter((key) => !Sfx.isLoaded(key));
+    console.info(`[boot] audio: ${wanted.length - missing.length} of ${wanted.length} sounds loaded`);
+    if (missing.length > 0) {
+      console.warn(`[boot] missing audio, these will be silent: ${missing.join(', ')}`);
     }
   }
 

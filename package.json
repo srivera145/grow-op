@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "autotile": "node tools/autotile.mjs"
+    "autotile": "node tools/autotile.mjs",
+    "audio": "node tools/make-audio.mjs"
   },
   "dependencies": {
     "phaser": "3.90.0"

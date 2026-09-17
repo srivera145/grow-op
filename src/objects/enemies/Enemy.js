@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { ENEMIES } from '../../config/constants.js';
 import { alignBodyToFrame } from '../bodyAlign.js';
 import { spawnEffect } from '../effects.js';
+import Sfx from '../../audio/Sfx.js';
 
 /**
  * Shared enemy behaviour: sleeping until the camera gets close, the touch/stomp/defeat
@@ -100,10 +101,12 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
   /**
    * Removes the enemy. With art: plays the death animation on the spot with a puff of dust.
    * Without it, 'squash' flattens the placeholder and 'knockout' flips it and drops it off the map.
+   * `sound` is what it says as it goes.
    */
-  defeat(style = 'squash', animKey = this.art.death) {
+  defeat(style = 'squash', animKey = this.art.death, sound = 'enemy-death') {
     if (this.defeated) return;
     this.defeated = true;
+    Sfx.play(sound);
 
     if (animKey && this.scene.anims.exists(animKey)) {
       this.body.enable = false;

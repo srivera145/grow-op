@@ -4,6 +4,7 @@ import { playerAnim } from '../config/animations.js';
 import { alignBodyToFrame } from './bodyAlign.js';
 import { spawnEffect } from './effects.js';
 import { touchSource } from '../input/TouchSource.js';
+import Sfx from '../audio/Sfx.js';
 
 const { KeyCodes, JustDown } = Phaser.Input.Keyboard;
 const NO_INPUT = Object.freeze({ left: false, right: false, jumpHeld: false, jumpPressed: false, attackPressed: false });
@@ -153,6 +154,7 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
       this.jumpBufferTimer = 0;
       this.coyoteTimer = 0;
       this.isJumping = true;
+      Sfx.play('jump');
     }
 
     // Count down after the check, so the first airborne frame still counts in full
@@ -195,6 +197,7 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
       this.attackStartedAt = now;
       this.slashSpawned = false;
       this.animState = null; // lets a new attack restart the animation
+      Sfx.play('slash');
     }
 
     const frame = Math.floor((now - this.attackStartedAt) / ATTACK.FRAME_MS);
@@ -221,6 +224,7 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     if (this.isBig) return;
     this.setBig(true);
     this.growUntil = this.scene.time.now + PLAYER.GROW_ANIM_MS;
+    Sfx.play('grow');
   }
 
   /** Swaps between the small and big forms while keeping the feet where they are. */
@@ -246,11 +250,13 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
   takeHit() {
     if (this.isInvincible() || this.hasMercy()) return false;
 
+    Sfx.play('hurt');
     if (this.isBig) {
       this.setBig(false);
       this.mercyUntil = this.scene.time.now + PLAYER.HIT_MERCY_MS;
       this.hurtUntil = this.scene.time.now + PLAYER.HURT_ANIM_MS;
       this.growUntil = 0;
+      Sfx.play('shrink');
       return false;
     }
     return true;
@@ -336,9 +342,11 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     const now = this.scene.time.now;
 
     if (onGround) {
-      if (this.airTime >= MIN_AIR_MS_FOR_LANDING && !this.isDead) {
+      // Not while celebrating: touching the jar counts as ground contact, and the jar sequence is no landing.
+      if (this.airTime >= MIN_AIR_MS_FOR_LANDING && !this.isDead && !this.isCelebrating) {
         this.landUntil = now + PLAYER.LAND_ANIM_MS;
         spawnEffect(this.scene, this.x, this.body.bottom, 'dust-puff', { bottom: true });
+        Sfx.play('land');
       }
       this.airTime = 0;
     } else {

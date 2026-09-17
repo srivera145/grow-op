@@ -29,7 +29,7 @@ export default class RootRot extends Enemy {
       return;
     }
     this.split();
-    this.defeat('squash', 'root-rot-split');
+    this.defeat('squash', 'root-rot-split', 'root-rot-split'); // the split animation and its sound
   }
 
   split() {

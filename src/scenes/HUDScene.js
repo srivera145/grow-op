@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH, TOUCH, UI } from '../config/constants.js';
 import { touchControlsWanted } from '../input/TouchSource.js';
+import { addMuteButton } from '../audio/muteButton.js';
 
 const TEXT_STYLE = {
   fontFamily: 'monospace',
@@ -42,6 +43,7 @@ export default class HUDScene extends Phaser.Scene {
     this.timeText = this.addReadout(LAYOUT.time);
     this.scoreText = this.addReadout(LAYOUT.score);
     this.livesText = this.addReadout(LAYOUT.lives);
+    addMuteButton(this, GAME_WIDTH / 2, 62); // under the clock, clear of the readouts and the message line
 
     this.messageText = this.add
       .text(GAME_WIDTH / 2, 110, '', { ...TEXT_STYLE, fontSize: '28px', strokeThickness: 5 })
@@ -77,7 +79,7 @@ export default class HUDScene extends Phaser.Scene {
     if (touch) {
       this.helpText.setText(TOUCH.HELP.text).setOrigin(0.5, 1).setPosition(TOUCH.HELP.x, TOUCH.HELP.y);
     } else {
-      this.helpText.setText('Move: Arrows / A D    Jump: Space / Up / W    Slash: X / J').setOrigin(0, 1).setPosition(16, GAME_HEIGHT - 12);
+      this.helpText.setText('Move: Arrows / A D    Jump: Space / Up / W    Slash: X / J    Mute: M').setOrigin(0, 1).setPosition(16, GAME_HEIGHT - 12);
     }
   }
 
