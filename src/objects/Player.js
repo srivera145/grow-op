@@ -129,6 +129,15 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     }
   }
 
+  /** Rebound off a stomped enemy. Holding jump turns it into a full-height, cuttable jump. */
+  bounce() {
+    const k = this.keys;
+    const held = this.controlsEnabled && (k.space.isDown || k.up.isDown || k.w.isDown);
+    this.setVelocityY(held ? PLAYER.JUMP_VELOCITY : PLAYER.STOMP_BOUNCE_VELOCITY);
+    this.isJumping = held;
+    this.coyoteTimer = 0;
+  }
+
   // ---------- growth ----------
 
   grow() {
@@ -177,11 +186,22 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     return this.scene.time.now < this.mercyUntil;
   }
 
-  /** Puts a fresh small player at the given point with every effect and timer cleared. */
+  /** Death animation for a fatal hit: a short hop, then a fall through the floor and off the map. */
+  die() {
+    this.controlsEnabled = false;
+    this.body.checkCollision.none = true;
+    this.setCollideWorldBounds(false);
+    this.setAcceleration(0, 0);
+    this.setVelocity(0, PLAYER.DEATH_HOP_VELOCITY);
+  }
+
+  /** Puts a fresh small player at the given point, briefly protected, with every other effect cleared. */
   respawn(x, y) {
     this.setBig(false);
+    this.body.checkCollision.none = false;
+    this.setCollideWorldBounds(true);
     this.invincibleUntil = 0;
-    this.mercyUntil = 0;
+    this.mercyUntil = this.scene.time.now + PLAYER.HIT_MERCY_MS;
     this.coyoteTimer = 0;
     this.jumpBufferTimer = 0;
     this.isJumping = false;

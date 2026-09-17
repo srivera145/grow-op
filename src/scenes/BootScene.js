@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TEXTURES, TILE_SIZE, FIRST_LEVEL } from '../config/constants.js';
+import { TEXTURES, TILE_SIZE } from '../config/constants.js';
 
 /**
  * Generates placeholder textures so the game runs with no art files.
@@ -20,8 +20,11 @@ export default class BootScene extends Phaser.Scene {
     this.makePlaceholder(T.LIGHT_ORB, 24, 24, 0xffd60a, 0xc79a00, { shape: 'circle' });
     this.makePlaceholder(T.NUTRIENT, 24, 24, 0x9d4edd, 0x6a2ba8, { shape: 'circle' });
     this.makePlaceholder(T.GOAL_JAR, 32, 64, 0xa8dadc, 0x457b9d, { lidColor: 0x6d4c41 });
+    this.makePlaceholder(T.SPIDER_MITE, 32, 24, 0xd62828, 0x8d1a1a);
+    this.makePlaceholder(T.FUNGUS_GNAT, 24, 24, 0x9aa0a6, 0x5f6368, { shape: 'circle' });
+    this.makePlaceholder(T.ROOT_ROT, 32, 32, 0x31572c, 0x1b3318, { shape: 'circle' });
 
-    this.scene.start('GameScene', { level: FIRST_LEVEL, reset: true });
+    this.scene.start('TitleScene');
   }
 
   /**

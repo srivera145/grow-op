@@ -1,7 +1,17 @@
 import Phaser from 'phaser';
 import Player from '../objects/Player.js';
 import Pickup, { PICKUP_KINDS } from '../objects/Pickup.js';
-import { CAMERA, FIRST_LEVEL, LEVELS, PICKUPS, RULES, TEXTURES } from '../config/constants.js';
+import SpiderMite from '../objects/enemies/SpiderMite.js';
+import FungusGnat from '../objects/enemies/FungusGnat.js';
+import RootRot from '../objects/enemies/RootRot.js';
+import { CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, RULES, TEXTURES } from '../config/constants.js';
+
+// Enemy classes by the object name used in the Tiled "objects" layer.
+const ENEMY_TYPES = {
+  'spider-mite': SpiderMite,
+  'fungus-gnat': FungusGnat,
+  'root-rot': RootRot,
+};
 
 /** Centre of a Tiled object. Rectangles are anchored top-left; points have no size. */
 function objectCentre(obj) {
@@ -10,7 +20,7 @@ function objectCentre(obj) {
 
 /**
  * Plays one level: loads its Tiled map, spawns everything named in the "objects" layer,
- * follows the player with the camera and applies the rules (score, drops, lives).
+ * follows the player with the camera and applies the rules (score, drops, lives, damage).
  * Progress lives in the game registry so the HUD scene can display it.
  */
 export default class GameScene extends Phaser.Scene {
@@ -21,6 +31,7 @@ export default class GameScene extends Phaser.Scene {
   init(data = {}) {
     this.level = LEVELS[data.level] ?? LEVELS[FIRST_LEVEL];
     this.state = 'playing'; // 'playing' | 'dead' | 'complete'
+    this.levelDrops = 0; // drops collected this run, for the grade screen (the HUD counter wraps at 100)
 
     if (data.reset !== false) {
       this.registry.set({ score: 0, drops: 0, lives: RULES.START_LIVES });
@@ -39,26 +50,30 @@ export default class GameScene extends Phaser.Scene {
     this.groundLayer = this.map.createLayer('ground', tileset, 0, 0);
     this.groundLayer.setCollisionByExclusion([-1]);
 
-    // The world is the map, open at the bottom so gaps drop the player out of it.
+    // The world is the map, open at the bottom so gaps drop things out of it.
     const { widthInPixels, heightInPixels } = this.map;
     this.physics.world.setBounds(0, 0, widthInPixels, heightInPixels, true, true, true, false);
 
     this.spawnObjects(this.map.getObjectLayer('objects'));
 
     this.physics.add.collider(this.player, this.groundLayer);
+    this.physics.add.collider(this.enemies, this.groundLayer, undefined, (enemy) => enemy.collidesWithGround);
     this.physics.add.overlap(this.player, this.pickups, this.onPickup, undefined, this);
+    this.physics.add.overlap(this.player, this.enemies, this.onEnemyContact, undefined, this);
 
     const camera = this.cameras.main;
     camera.setBounds(0, 0, widthInPixels, heightInPixels);
     camera.startFollow(this.player, true, CAMERA.LERP, CAMERA.LERP);
     camera.setDeadzone(CAMERA.DEADZONE_WIDTH, CAMERA.DEADZONE_HEIGHT);
 
+    this.levelStartTime = this.time.now;
     this.scene.run('HUDScene');
   }
 
   /** Creates game objects from the Tiled object layer, matching on each object's name. */
   spawnObjects(layer) {
     this.pickups = this.add.group();
+    this.enemies = this.add.group();
     this.playerStart = { x: 64, y: 64 };
 
     for (const obj of layer?.objects ?? []) {
@@ -67,13 +82,22 @@ export default class GameScene extends Phaser.Scene {
         this.playerStart = { x, y };
       } else if (obj.name in PICKUP_KINDS) {
         this.pickups.add(new Pickup(this, x, y, obj.name));
+      } else if (obj.name in ENEMY_TYPES) {
+        this.spawnEnemy(obj.name, x, y);
       } else {
         console.warn(`Level ${this.level.key}: no spawn rule for object "${obj.name}"`);
       }
     }
 
-    // Created last so the player draws in front of the pickups.
+    // Created last so the player draws in front of everything else.
     this.player = new Player(this, this.playerStart.x, this.playerStart.y);
+  }
+
+  /** Adds an enemy to the level. Also used by enemies that spawn others, such as a splitting root rot. */
+  spawnEnemy(kind, x, y, options) {
+    const enemy = new ENEMY_TYPES[kind](this, x, y, options);
+    this.enemies.add(enemy);
+    return enemy;
   }
 
   update(time, delta) {
@@ -81,7 +105,7 @@ export default class GameScene extends Phaser.Scene {
 
     const fellOut = this.player.y > this.map.heightInPixels + RULES.FALL_DEATH_MARGIN;
     if (this.state === 'playing' && fellOut) {
-      this.loseLife();
+      this.loseLife('fall');
     }
   }
 
@@ -106,7 +130,7 @@ export default class GameScene extends Phaser.Scene {
         this.announce('NUTRIENT BOOST!');
         break;
       case 'goal-jar':
-        this.completeLevel();
+        this.completeLevel(pickup);
         return; // the jar stays in place
       default:
         return;
@@ -115,6 +139,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   addDrop() {
+    this.levelDrops += 1;
     let drops = this.registry.get('drops') + 1;
     if (drops >= PICKUPS.DROPS_PER_LIFE) {
       drops -= PICKUPS.DROPS_PER_LIFE;
@@ -124,24 +149,61 @@ export default class GameScene extends Phaser.Scene {
     this.registry.set('drops', drops);
   }
 
-  // ---------- damage, death and level flow ----------
+  // ---------- enemies and damage ----------
 
-  /** Entry point for enemies and hazards: big players shrink, small unprotected ones lose a life. */
+  onEnemyContact(player, enemy) {
+    if (this.state !== 'playing' || !enemy.canTouch()) return;
+
+    // Nutrient invincibility beats every enemy, including the ones that cannot be stomped.
+    if (player.isInvincible()) {
+      enemy.defeat('knockout');
+      this.registry.inc('score', ENEMIES.STOMP_SCORE);
+      return;
+    }
+
+    if (enemy.stompable && this.isStomp(player, enemy)) {
+      enemy.stomp(player);
+      player.bounce();
+      this.registry.inc('score', ENEMIES.STOMP_SCORE);
+      return;
+    }
+
+    this.hitPlayer();
+  }
+
+  /**
+   * A stomp is the player falling onto the top of an enemy. Judged from where both bodies
+   * were before this physics step, so a fast fall that sinks deep into the enemy still counts
+   * while running into its side never does.
+   */
+  isStomp(player, enemy) {
+    const feetBefore = player.body.bottom - player.body.deltaY();
+    const headBefore = enemy.body.top - enemy.body.deltaY();
+    return player.body.velocity.y > 0 && feetBefore <= headBefore + ENEMIES.STOMP_TOLERANCE;
+  }
+
+  /** One point of damage: big players shrink, small unprotected ones lose a life. */
   hitPlayer() {
     if (this.state === 'playing' && this.player.takeHit()) {
-      this.loseLife();
+      this.loseLife('hit');
     }
   }
 
-  loseLife() {
+  // ---------- death and level flow ----------
+
+  loseLife(cause) {
     this.state = 'dead';
     this.player.controlsEnabled = false;
+    if (cause === 'hit') {
+      this.player.die();
+    }
     this.registry.inc('lives', -1);
 
     if (this.registry.get('lives') <= 0) {
       this.announce('GAME OVER', RULES.GAME_OVER_DELAY_MS);
       this.time.delayedCall(RULES.GAME_OVER_DELAY_MS, () => {
-        this.scene.restart({ level: this.level.key, reset: true });
+        this.scene.stop('HUDScene');
+        this.scene.start('TitleScene');
       });
       return;
     }
@@ -153,15 +215,37 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
-  completeLevel() {
+  /** Goal reached: freeze the player, pop them into the jar, then open the grade screen. */
+  completeLevel(jar) {
     this.state = 'complete';
-    this.player.controlsEnabled = false;
-    this.registry.inc('score', PICKUPS.GOAL_SCORE);
-    this.announce('STAGE CLEAR!', RULES.STAGE_CLEAR_DELAY_MS);
+    const player = this.player;
+    const timeMs = this.time.now - this.levelStartTime;
 
-    // There is no next level yet, so replay this one and keep the score and lives.
-    this.time.delayedCall(RULES.STAGE_CLEAR_DELAY_MS, () => {
-      this.scene.restart({ level: this.level.key, reset: false });
+    player.controlsEnabled = false;
+    player.body.enable = false; // physics off so the tween owns the sprite
+    this.registry.inc('score', PICKUPS.GOAL_SCORE);
+    this.announce('STAGE CLEAR!', 2000);
+
+    this.tweens.chain({
+      tweens: [
+        // hop up over the mouth of the jar
+        { targets: player, x: jar.x, y: jar.y - jar.height / 2 - player.height / 2 - 8, duration: 280, ease: 'Sine.easeOut' },
+        // drop inside, shrinking to fit
+        { targets: player, y: jar.y + 8, scale: 0.6, duration: 320, ease: 'Sine.easeIn' },
+        // the jar thumps as the lid seals
+        { targets: jar, scaleX: 1.12, scaleY: 0.92, duration: 90, yoyo: true, repeat: 1 },
+      ],
+      onComplete: () => {
+        this.time.delayedCall(RULES.JARRING_HOLD_MS, () => {
+          this.scene.stop('HUDScene');
+          this.scene.start('LevelCompleteScene', {
+            level: this.level.key,
+            score: this.registry.get('score'),
+            drops: this.levelDrops,
+            timeMs,
+          });
+        });
+      },
     });
   }
 
