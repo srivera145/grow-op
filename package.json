@@ -1,0 +1,21 @@
+{
+  "name": "grow-op",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Grow Op: a 2D platformer where a cannabis seedling fights through its grow stages.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "phaser": "3.90.0"
+  },
+  "devDependencies": {
+    "vite": "8.3.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
