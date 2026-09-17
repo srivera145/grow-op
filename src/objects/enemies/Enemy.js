@@ -25,6 +25,8 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.slashable = false; // true: the player's leaf slash kills it
     this.collidesWithGround = true; // flyers turn this off
     this.direction = options.direction ?? -1; // -1 heads left, toward a player coming from the start
+    this.homeX = x; // centre of its patrol: where the level (or a splitting parent) put it
+    this.homeY = y;
     this.activated = false;
     this.defeated = false;
     this.harmlessUntil = 0; // scene clock time before which the enemy cannot touch the player
@@ -130,16 +132,32 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
     });
   }
 
-  /** Walks along the ground, reversing at walls, world edges and (optionally) ledges. */
-  patrol(speed, turnAtLedges = true) {
+  /**
+   * Walks back and forth along the ground. It turns around at a wall or world edge, at a ledge, and at
+   * `range` px either side of homeX, whichever comes first, so a walker stays where the level put it.
+   */
+  patrol(speed, range = Infinity, turnAtLedges = true) {
     const body = this.body;
-    if (body.blocked.left) {
-      this.direction = 1;
-    } else if (body.blocked.right) {
-      this.direction = -1;
-    } else if (turnAtLedges && body.blocked.down && !this.hasGroundAhead()) {
+
+    // Past the end of its range it heads for home. Inside the range this is 0 and changes nothing.
+    const homeward = this.x < this.homeX - range ? 1 : this.x > this.homeX + range ? -1 : 0;
+    if (homeward !== 0) {
+      this.direction = homeward;
+    }
+
+    const wallAhead = this.direction < 0 ? body.blocked.left : body.blocked.right;
+    const ledgeAhead = turnAtLedges && body.blocked.down && !this.hasGroundAhead();
+    if (wallAhead || ledgeAhead) {
+      if (homeward !== 0) {
+        // Out of range with the way home cut off (only possible if something moved it there):
+        // wait, facing home, rather than flip back and forth every frame.
+        this.setVelocityX(0);
+        this.faceDirection();
+        return;
+      }
       this.direction *= -1;
     }
+
     this.setVelocityX(speed * this.direction);
     this.faceDirection();
   }

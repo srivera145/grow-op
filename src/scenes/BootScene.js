@@ -19,26 +19,37 @@ export default class BootScene extends Phaser.Scene {
   }
 
   preload() {
-    this.failed = [];
-    this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, (file) => this.failed.push(file.key));
+    // Every key asked for here. Afterwards, whichever of them has no texture is missing art. That covers a
+    // plain 404 as well as a dev server that answers a missing file with an HTML page, which Phaser reports
+    // as a processing error rather than a load error.
+    this.requested = [];
+    const request = (key) => this.requested.push(key);
 
     for (const [key, def] of Object.entries(ANIMATIONS)) {
       if (!def.pending) {
         this.load.image(key, `${SHEET_PATH}/${key}.png`);
+        request(key);
       }
     }
     for (const layer of PARALLAX) {
       this.load.image(layer.key, `assets/bg/${layer.key}.png`);
+      request(layer.key);
     }
     for (const [key, def] of Object.entries(TILESETS)) {
       this.load.image(key, def.file);
+      request(key);
     }
     this.load.image(UI.LOGO.key, UI.LOGO.file);
+    request(UI.LOGO.key);
     const icons = UI.HUD_ICONS;
     this.load.spritesheet(icons.key, icons.file, { frameWidth: icons.frameSize, frameHeight: icons.frameSize });
+    request(icons.key);
   }
 
   create() {
+    // Checked before the placeholders are made, because a stand-in tileset takes the missing file's key.
+    this.missing = this.requested.filter((key) => !this.textures.exists(key));
+
     this.makePlaceholders();
     this.sliceStrips();
     createAnimations(this);
@@ -121,8 +132,8 @@ export default class BootScene extends Phaser.Scene {
     const pending = sheets.filter(([, def]) => def.pending).map(([key]) => key);
     const loaded = sheets.filter(([key]) => this.textures.exists(key)).length;
     console.info(`[boot] art: ${loaded} of ${sheets.length} animation sheets loaded, ${pending.length} marked pending`);
-    if (this.failed.length > 0) {
-      console.warn(`[boot] missing art, placeholders will be used instead: ${this.failed.join(', ')}`);
+    if (this.missing.length > 0) {
+      console.warn(`[boot] missing art, placeholders will be used instead: ${this.missing.join(', ')}`);
     }
   }
 

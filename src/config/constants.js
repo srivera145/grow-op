@@ -42,7 +42,16 @@ export const TILESETS = {
 
 // Interface images. hud-icons is a strip of 16x16 frames; FRAME names which frame shows what.
 export const UI = {
-  LOGO: { key: 'logo-growop', file: 'assets/ui/logo-growop.png', maxWidthFraction: 0.7 },
+  LOGO: {
+    key: 'logo-growop',
+    file: 'assets/ui/logo-growop.png',
+    maxWidthFraction: 0.7,
+    // Title animation: the logo pops in from a little smaller, then drifts up and back down forever.
+    INTRO_MS: 450,
+    INTRO_START_SCALE: 0.85, // fraction of its resting size that it grows from
+    FLOAT_PIXELS: 8, // how far it rises above its resting spot; it never dips below, so it cannot reach the prompt
+    FLOAT_MS: 1800, // one rise, and the same again to settle back
+  },
   HUD_ICONS: {
     key: 'hud-icons',
     file: 'assets/sheets/hud-icons.png',
@@ -138,9 +147,11 @@ export const ENEMIES = {
   STOMP_TOLERANCE: 12, // how far below an enemy's head the player's feet may have been last frame and still stomp
   SPAWN_GRACE_MS: 350, // freshly split blobs cannot touch the player for this long
   DESPAWN_MARGIN: 96, // enemies that fall this far below the map are removed
-  SPIDER_MITE: { SPEED: 60, BODY: { width: 34, height: 26 } },
+  // RANGE: every enemy patrols this many px either side of the x it was placed at (a split blob: where it
+  // split). Walkers still turn sooner at a wall or a ledge, whichever comes first.
+  SPIDER_MITE: { SPEED: 60, RANGE: 120, BODY: { width: 34, height: 26 } },
   FUNGUS_GNAT: { SPEED: 70, AMPLITUDE: 40, PERIOD_MS: 1600, RANGE: 96, BODY: { width: 28, height: 24 } }, // sine flight, patrolling RANGE px either side of its spawn point
-  ROOT_ROT: { SPEED: 28, SMALL_SPEED: 55, SPLIT_HOP_VELOCITY: -220, SPLIT_OFFSET: 10, BODY: { width: 36, height: 28 }, SMALL_BODY: { width: 22, height: 18 } },
+  ROOT_ROT: { SPEED: 28, SMALL_SPEED: 55, RANGE: 96, SMALL_RANGE: 64, SPLIT_HOP_VELOCITY: -220, SPLIT_OFFSET: 10, BODY: { width: 36, height: 28 }, SMALL_BODY: { width: 22, height: 18 } },
 };
 
 // Harvest grades, best first. A score earns the first grade whose minimum it reaches.

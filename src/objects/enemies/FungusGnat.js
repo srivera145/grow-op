@@ -20,9 +20,7 @@ export default class FungusGnat extends Enemy {
     this.body.setAllowGravity(false);
     this.setCollideWorldBounds(false);
 
-    this.homeX = x;
-    this.homeY = y;
-    this.flightTime = 0;
+    this.flightTime = 0; // homeX and homeY, the centre of its flight, are set by Enemy
   }
 
   act(time, delta) {

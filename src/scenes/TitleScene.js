@@ -20,6 +20,7 @@ export default class TitleScene extends Phaser.Scene {
       // Never enlarged: scaling pixel art up by a fraction smears it.
       this.logo = this.add.image(centreX, PROMPT_Y / 2, UI.LOGO.key);
       this.logo.setScale(Math.min(1, (GAME_WIDTH * UI.LOGO.maxWidthFraction) / this.logo.width, (PROMPT_Y - 60) / this.logo.height));
+      this.animateLogo();
     } else {
       // No logo image: the text title stands in for it.
       this.add.text(centreX, 190, 'GROW OP', { ...FONT, fontSize: '72px', color: '#4cd137', strokeThickness: 8 }).setOrigin(0.5);
@@ -35,6 +36,26 @@ export default class TitleScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-SPACE', (event) => !event.repeat && this.startGame());
     this.input.keyboard.on('keydown-ENTER', (event) => !event.repeat && this.startGame());
     this.input.on('pointerup', () => this.startGame());
+  }
+
+  /** A quick pop-in, then a slow float. Only position, scale and alpha are tweened; rotation would shred pixel art. */
+  animateLogo() {
+    const { INTRO_MS, INTRO_START_SCALE, FLOAT_PIXELS, FLOAT_MS } = UI.LOGO;
+    const logo = this.logo;
+    const restScale = logo.scale;
+    const restY = logo.y;
+
+    logo.setAlpha(0).setScale(restScale * INTRO_START_SCALE);
+    this.tweens.add({
+      targets: logo,
+      alpha: 1,
+      scale: restScale,
+      duration: INTRO_MS,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        this.tweens.add({ targets: logo, y: restY - FLOAT_PIXELS, duration: FLOAT_MS, ease: 'Sine.easeInOut', yoyo: true, repeat: -1 });
+      },
+    });
   }
 
   startGame() {

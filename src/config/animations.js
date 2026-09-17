@@ -20,6 +20,14 @@ const ONCE = 0;
 // until they exist. Set this to false once the files are in public/assets/sheets.
 const BIG_FORM_PENDING = true;
 
+// Stopgap for the big form while its strips are pending: every big-form state shows one still image, the
+// last frame of little-bud-grow.png, which is the big Little Bud standing. He looks right at rest and
+// simply does not animate while moving. It only ever applies while BIG_FORM_PENDING is also true, so once the
+// real strips are in and BIG_FORM_PENDING is set to false this does nothing, with no other edit needed.
+// If the grow strip itself is missing, the big form falls through to its green placeholder as before.
+const BIG_FORM_STOPGAP = true;
+const BIG_FORM_STAND_IN = { key: 'little-bud-grow', frame: 3 };
+
 // Player states shared by both forms. Keys become little-bud-<form>-<state>.
 const PLAYER_STATES = {
   idle: { frames: 4, frameRate: 6, repeat: LOOP },
@@ -46,7 +54,7 @@ export function playerAnim(form, state) {
 export const ANIMATIONS = {
   // Player
   ...playerForm('small'),
-  ...playerForm('big', { pending: BIG_FORM_PENDING }),
+  ...playerForm('big', { pending: BIG_FORM_PENDING, standIn: BIG_FORM_PENDING && BIG_FORM_STOPGAP ? BIG_FORM_STAND_IN : undefined }),
   'little-bud-grow': { frames: 4, frameRate: 4000 / PLAYER.GROW_ANIM_MS, repeat: ONCE }, // small to big, in big-form frames
 
   // Enemies
@@ -71,15 +79,30 @@ export const ANIMATIONS = {
   'dust-puff': { frames: 4, frameRate: 14, repeat: ONCE },
 };
 
-/** Registers an animation for every sheet that actually loaded. Called once from BootScene. */
+/** Registers an animation for every sheet that actually loaded, and any configured stand-ins. Called once from BootScene. */
 export function createAnimations(scene) {
+  const standIns = [];
+
   for (const [key, def] of Object.entries(ANIMATIONS)) {
-    if (!scene.textures.exists(key) || scene.anims.exists(key)) continue;
-    scene.anims.create({
-      key,
-      frames: Array.from({ length: def.frames }, (_, frame) => ({ key, frame })),
-      frameRate: def.frameRate,
-      repeat: def.repeat,
-    });
+    if (scene.anims.exists(key)) continue;
+
+    if (scene.textures.exists(key)) {
+      scene.anims.create({
+        key,
+        frames: Array.from({ length: def.frames }, (_, frame) => ({ key, frame })),
+        frameRate: def.frameRate,
+        repeat: def.repeat,
+      });
+    } else if (def.standIn && scene.textures.exists(def.standIn.key)) {
+      // No sheet of its own, but a stand-in is configured: a one-frame "animation" under the same key,
+      // so whatever plays this state shows that still image and needs no special case.
+      scene.anims.create({ key, frames: [def.standIn], frameRate: 1, repeat: 0 });
+      standIns.push(key);
+    }
+  }
+
+  if (standIns.length > 0) {
+    const { key, frame } = BIG_FORM_STAND_IN;
+    console.info(`[boot] big-form stopgap active: ${standIns.length} big-form states show frame ${frame} of ${key}.png as a still image, so big Little Bud does not animate. It switches itself off when BIG_FORM_PENDING is set to false in config/animations.js.`);
   }
 }

@@ -9,6 +9,8 @@ const MINI_ART = { move: 'root-rot-mini-crawl', death: 'root-rot-mini-death', bo
 /**
  * Slow blob. Stomping a full-size one splits it into two mini blobs that hop apart;
  * the minis are faster and die to a stomp without splitting again. The leaf slash does nothing to either.
+ * Both sizes patrol a range around where they appeared: a mini's centre is the spot it split off at,
+ * not the place its parent was first put.
  */
 export default class RootRot extends Enemy {
   constructor(scene, x, y, options = {}) {
@@ -18,7 +20,7 @@ export default class RootRot extends Enemy {
   }
 
   act() {
-    this.patrol(this.isSmall ? CFG.SMALL_SPEED : CFG.SPEED);
+    this.patrol(this.isSmall ? CFG.SMALL_SPEED : CFG.SPEED, this.isSmall ? CFG.SMALL_RANGE : CFG.RANGE);
   }
 
   stomp() {
