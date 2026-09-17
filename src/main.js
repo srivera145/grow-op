@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import BootScene from './scenes/BootScene.js';
 import GameScene from './scenes/GameScene.js';
+import HUDScene from './scenes/HUDScene.js';
 import { GAME_WIDTH, GAME_HEIGHT, GRAVITY_Y } from './config/constants.js';
 
 const config = {
@@ -21,7 +22,7 @@ const config = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, GameScene],
+  scene: [BootScene, GameScene, HUDScene],
 };
 
 const game = new Phaser.Game(config);

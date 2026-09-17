@@ -2,10 +2,12 @@ import Phaser from 'phaser';
 import { PLAYER, TEXTURES } from '../config/constants.js';
 
 const { KeyCodes, JustDown } = Phaser.Input.Keyboard;
+const NO_INPUT = Object.freeze({ left: false, right: false, jumpHeld: false, jumpPressed: false });
 
 /**
  * The seedling. An Arcade sprite driven by acceleration and drag rather than
  * instant velocity, with variable jump height, coyote time and a jump buffer.
+ * It also owns its growth state (small or big) and its protective status effects.
  */
 export default class Player extends Phaser.Physics.Arcade.Sprite {
   constructor(scene, x, y) {
@@ -32,15 +34,23 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     this.coyoteTimer = 0; // > 0 while a jump is still allowed after leaving the ground
     this.jumpBufferTimer = 0; // > 0 while a recent jump press is waiting to be used
     this.isJumping = false; // true while rising from a jump we started; enables the early-release cut
+
+    this.controlsEnabled = true; // the scene turns this off for stage clear and game over
+    this.isBig = false; // small is 32x32, big is 32x48
+    this.invincibleUntil = 0; // scene clock time until which nutrient invincibility lasts
+    this.mercyUntil = 0; // scene clock time until which post-hit protection lasts
   }
 
   /** Called by the owning scene once per frame. */
   update(time, delta) {
-    const input = this.readInput();
+    // Always read the keys so just-pressed flags are consumed even while controls are off.
+    const pressed = this.readInput();
+    const input = this.controlsEnabled ? pressed : NO_INPUT;
     const onGround = this.isOnGround();
 
     this.updateHorizontal(input, onGround);
     this.updateJump(input, onGround, delta);
+    this.updateEffects();
   }
 
   readInput() {
@@ -116,6 +126,87 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     // Past the apex, or once landed, the cut no longer applies.
     if (this.body.velocity.y >= 0) {
       this.isJumping = false;
+    }
+  }
+
+  // ---------- growth ----------
+
+  grow() {
+    this.setBig(true);
+  }
+
+  /** Swaps between the small and big forms while keeping the feet where they are. */
+  setBig(big) {
+    if (big === this.isBig) return;
+    this.isBig = big;
+
+    const oldHeight = this.height;
+    this.setTexture(big ? TEXTURES.PLAYER_BIG : TEXTURES.PLAYER);
+    this.body.setSize(this.width, this.height, true);
+    // The origin is the sprite centre, so shift by half the height change to pin the bottom edge.
+    this.y += (oldHeight - this.height) / 2;
+  }
+
+  // ---------- damage and protection ----------
+
+  /**
+   * Applies one hit from an enemy or hazard. Returns true when the hit is fatal, which
+   * the scene turns into a lost life. A big player shrinks instead and gets a short
+   * mercy window; invincible or mercy-protected players ignore the hit entirely.
+   */
+  takeHit() {
+    if (this.isInvincible() || this.hasMercy()) return false;
+
+    if (this.isBig) {
+      this.setBig(false);
+      this.mercyUntil = this.scene.time.now + PLAYER.HIT_MERCY_MS;
+      return false;
+    }
+    return true;
+  }
+
+  makeInvincible(duration = PLAYER.NUTRIENT_DURATION_MS) {
+    this.invincibleUntil = this.scene.time.now + duration;
+  }
+
+  isInvincible() {
+    return this.scene.time.now < this.invincibleUntil;
+  }
+
+  hasMercy() {
+    return this.scene.time.now < this.mercyUntil;
+  }
+
+  /** Puts a fresh small player at the given point with every effect and timer cleared. */
+  respawn(x, y) {
+    this.setBig(false);
+    this.invincibleUntil = 0;
+    this.mercyUntil = 0;
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
+    this.isJumping = false;
+    this.controlsEnabled = true;
+    this.clearTint();
+    this.setAlpha(1);
+    this.setAcceleration(0, 0);
+    this.body.reset(x, y);
+  }
+
+  updateEffects() {
+    const phase = Math.floor(this.scene.time.now / PLAYER.FLASH_INTERVAL_MS);
+
+    // Nutrient invincibility cycles through a set of tints.
+    if (this.isInvincible()) {
+      this.setTint(PLAYER.INVINCIBLE_TINTS[phase % PLAYER.INVINCIBLE_TINTS.length]);
+    } else if (this.isTinted) {
+      this.clearTint();
+    }
+
+    // Post-hit mercy blinks the sprite.
+    if (this.hasMercy()) {
+      this.setAlpha(phase % 2 === 0 ? 1 : 0.35);
+    } else if (this.alpha !== 1) {
+      this.setAlpha(1);
     }
   }
 }
