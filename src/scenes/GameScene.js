@@ -4,7 +4,8 @@ import Pickup, { PICKUP_KINDS } from '../objects/Pickup.js';
 import SpiderMite from '../objects/enemies/SpiderMite.js';
 import FungusGnat from '../objects/enemies/FungusGnat.js';
 import RootRot from '../objects/enemies/RootRot.js';
-import { CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, RULES, TEXTURES } from '../config/constants.js';
+import ParallaxBackground from '../objects/ParallaxBackground.js';
+import { ATTACK, CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, RULES, TEXTURES } from '../config/constants.js';
 
 // Enemy classes by the object name used in the Tiled "objects" layer.
 const ENEMY_TYPES = {
@@ -44,6 +45,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   create() {
+    this.background = new ParallaxBackground(this);
+
     // Ground
     this.map = this.make.tilemap({ key: this.level.key });
     const tileset = this.map.addTilesetImage(this.level.tileset, TEXTURES.TILE_SOIL);
@@ -60,6 +63,7 @@ export default class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.enemies, this.groundLayer, undefined, (enemy) => enemy.collidesWithGround);
     this.physics.add.overlap(this.player, this.pickups, this.onPickup, undefined, this);
     this.physics.add.overlap(this.player, this.enemies, this.onEnemyContact, undefined, this);
+    this.physics.add.overlap(this.player.attackZone, this.enemies, this.onSlashHit, undefined, this);
 
     const camera = this.cameras.main;
     camera.setBounds(0, 0, widthInPixels, heightInPixels);
@@ -102,6 +106,7 @@ export default class GameScene extends Phaser.Scene {
 
   update(time, delta) {
     this.player.update(time, delta);
+    this.background.update();
 
     const fellOut = this.player.y > this.map.heightInPixels + RULES.FALL_DEATH_MARGIN;
     if (this.state === 'playing' && fellOut) {
@@ -171,6 +176,13 @@ export default class GameScene extends Phaser.Scene {
     this.hitPlayer();
   }
 
+  /** The leaf slash kills the enemies marked slashable and passes harmlessly through the rest. */
+  onSlashHit(zone, enemy) {
+    if (this.state !== 'playing' || !enemy.slashable || !enemy.canTouch()) return;
+    enemy.defeat('knockout');
+    this.registry.inc('score', ATTACK.SCORE);
+  }
+
   /**
    * A stomp is the player falling onto the top of an enemy. Judged from where both bodies
    * were before this physics step, so a fast fall that sinks deep into the enemy still counts
@@ -223,15 +235,19 @@ export default class GameScene extends Phaser.Scene {
 
     player.controlsEnabled = false;
     player.body.enable = false; // physics off so the tween owns the sprite
+    player.attackZone.body.enable = false;
+    player.celebrate();
     this.registry.inc('score', PICKUPS.GOAL_SCORE);
     this.announce('STAGE CLEAR!', 2000);
 
+    // Positions are body centres, and bodies keep their size whatever art is showing.
+    const hopY = jar.body.top - player.body.height / 2 - 24; // feet clear of the lid, which sits above the jar's body
     this.tweens.chain({
       tweens: [
         // hop up over the mouth of the jar
-        { targets: player, x: jar.x, y: jar.y - jar.height / 2 - player.height / 2 - 8, duration: 280, ease: 'Sine.easeOut' },
-        // drop inside, shrinking to fit
-        { targets: player, y: jar.y + 8, scale: 0.6, duration: 320, ease: 'Sine.easeIn' },
+        { targets: player, x: jar.x, y: hopY, duration: 280, ease: 'Sine.easeOut' },
+        // drop inside, shrinking out of sight
+        { targets: player, y: jar.y + 8, scale: 0.6, alpha: 0, duration: 320, ease: 'Sine.easeIn', onComplete: () => jar.close() },
         // the jar thumps as the lid seals
         { targets: jar, scaleX: 1.12, scaleY: 0.92, duration: 90, yoyo: true, repeat: 1 },
       ],

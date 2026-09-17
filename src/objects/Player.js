@@ -1,13 +1,21 @@
 import Phaser from 'phaser';
-import { PLAYER, TEXTURES } from '../config/constants.js';
+import { ATTACK, PLAYER, TEXTURES } from '../config/constants.js';
+import { playerAnim } from '../config/animations.js';
+import { alignBodyToFrame } from './bodyAlign.js';
+import { spawnEffect } from './effects.js';
 
 const { KeyCodes, JustDown } = Phaser.Input.Keyboard;
-const NO_INPUT = Object.freeze({ left: false, right: false, jumpHeld: false, jumpPressed: false });
+const NO_INPUT = Object.freeze({ left: false, right: false, jumpHeld: false, jumpPressed: false, attackPressed: false });
+const MIN_AIR_MS_FOR_LANDING = 100; // shorter hops (spawning, stepping off a 1px lip) get no landing animation
 
 /**
  * The seedling. An Arcade sprite driven by acceleration and drag rather than
  * instant velocity, with variable jump height, coyote time and a jump buffer.
- * It also owns its growth state (small or big) and its protective status effects.
+ * It also owns its growth state (small or big), its protective status effects, the leaf slash
+ * attack, and the choice of which animation shows for what it is currently doing.
+ *
+ * The sprite's position is always the centre of its physics body (see bodyAlign.js), so none of
+ * the movement code cares whether it is showing 64px art or a 32px placeholder.
  */
 export default class Player extends Phaser.Physics.Arcade.Sprite {
   constructor(scene, x, y) {
@@ -28,6 +36,8 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
       d: KeyCodes.D,
       w: KeyCodes.W,
       space: KeyCodes.SPACE,
+      x: KeyCodes.X,
+      j: KeyCodes.J,
     });
 
     // Countdown timers in ms. A jump fires on any frame where both are above zero.
@@ -36,9 +46,33 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     this.isJumping = false; // true while rising from a jump we started; enables the early-release cut
 
     this.controlsEnabled = true; // the scene turns this off for stage clear and game over
-    this.isBig = false; // small is 32x32, big is 32x48
+    this.isBig = false;
     this.invincibleUntil = 0; // scene clock time until which nutrient invincibility lasts
     this.mercyUntil = 0; // scene clock time until which post-hit protection lasts
+
+    // Leaf slash. The zone is the attack's hitbox; its body is only enabled during the active frames.
+    this.attackStartedAt = -Infinity;
+    this.slashSpawned = false;
+    this.attackZone = scene.add.zone(x, y, ATTACK.WIDTH, ATTACK.HEIGHT);
+    scene.physics.add.existing(this.attackZone);
+    this.attackZone.body.setAllowGravity(false);
+    this.attackZone.body.enable = false;
+
+    // Animation state. The *Until fields are scene clock times that hold a one-shot animation on screen.
+    this.animState = null;
+    this.animForm = null;
+    this.isDead = false;
+    this.isCelebrating = false;
+    this.growUntil = 0;
+    this.hurtUntil = 0;
+    this.landUntil = 0;
+    this.airTime = 0;
+
+    this.showState('idle', true);
+  }
+
+  get form() {
+    return this.isBig ? 'big' : 'small';
   }
 
   /** Called by the owning scene once per frame. */
@@ -50,22 +84,27 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 
     this.updateHorizontal(input, onGround);
     this.updateJump(input, onGround, delta);
+    this.updateAttack(input);
     this.updateEffects();
+    this.updateAnimation(onGround, delta);
   }
 
   readInput() {
     const k = this.keys;
-    // Call JustDown on every jump key. Short-circuiting with || would leave a stale
+    // Call JustDown on every key. Short-circuiting with || would leave a stale
     // just-down flag on the keys it skipped, which would then fire on a later frame.
     const spaceJust = JustDown(k.space);
     const upJust = JustDown(k.up);
     const wJust = JustDown(k.w);
+    const xJust = JustDown(k.x);
+    const jJust = JustDown(k.j);
 
     return {
       left: k.left.isDown || k.a.isDown,
       right: k.right.isDown || k.d.isDown,
       jumpHeld: k.space.isDown || k.up.isDown || k.w.isDown,
       jumpPressed: spaceJust || upJust || wJust,
+      attackPressed: xJust || jJust,
     };
   }
 
@@ -82,7 +121,7 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 
     if (input.left && !input.right) {
       this.setAccelerationX(-accel);
-      this.setFlipX(true);
+      this.setFlipX(true); // the art faces right
     } else if (input.right && !input.left) {
       this.setAccelerationX(accel);
       this.setFlipX(false);
@@ -138,22 +177,57 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     this.coyoteTimer = 0;
   }
 
+  // ---------- leaf slash ----------
+
+  /**
+   * Runs the attack on a timer that mirrors the attack animation's frames, so the hitbox and the
+   * slash effect stay in step with the art and still work when the art is missing.
+   */
+  updateAttack(input) {
+    const now = this.scene.time.now;
+    if (input.attackPressed && now - this.attackStartedAt >= ATTACK.COOLDOWN_MS) {
+      this.attackStartedAt = now;
+      this.slashSpawned = false;
+      this.animState = null; // lets a new attack restart the animation
+    }
+
+    const frame = Math.floor((now - this.attackStartedAt) / ATTACK.FRAME_MS);
+    const active = !this.isDead && frame >= ATTACK.ACTIVE_FROM_FRAME && frame <= ATTACK.ACTIVE_TO_FRAME;
+    const facing = this.flipX ? -1 : 1;
+    const reach = PLAYER.BODY[this.form].width / 2 + ATTACK.WIDTH / 2; // hitbox starts at the front of the body
+
+    this.attackZone.setPosition(this.x + facing * reach, this.y);
+    this.attackZone.body.enable = active;
+
+    if (active && !this.slashSpawned && frame >= ATTACK.SLASH_ON_FRAME) {
+      this.slashSpawned = true;
+      spawnEffect(this.scene, this.x + facing * reach, this.y, 'leaf-slash', { flipX: facing < 0 });
+    }
+  }
+
+  isAttacking() {
+    return this.scene.time.now - this.attackStartedAt < ATTACK.FRAME_MS * ATTACK.FRAMES;
+  }
+
   // ---------- growth ----------
 
   grow() {
+    if (this.isBig) return;
     this.setBig(true);
+    this.growUntil = this.scene.time.now + PLAYER.GROW_ANIM_MS;
   }
 
   /** Swaps between the small and big forms while keeping the feet where they are. */
   setBig(big) {
     if (big === this.isBig) return;
-    this.isBig = big;
 
-    const oldHeight = this.height;
-    this.setTexture(big ? TEXTURES.PLAYER_BIG : TEXTURES.PLAYER);
-    this.body.setSize(this.width, this.height, true);
-    // The origin is the sprite centre, so shift by half the height change to pin the bottom edge.
-    this.y += (oldHeight - this.height) / 2;
+    const oldHeight = PLAYER.BODY[this.form].height;
+    this.isBig = big;
+    const newHeight = PLAYER.BODY[this.form].height;
+
+    // The sprite's position is the centre of its body, so half the height change pins the feet.
+    this.y += (oldHeight - newHeight) / 2;
+    this.showState(this.animState ?? 'idle', true);
   }
 
   // ---------- damage and protection ----------
@@ -169,6 +243,8 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     if (this.isBig) {
       this.setBig(false);
       this.mercyUntil = this.scene.time.now + PLAYER.HIT_MERCY_MS;
+      this.hurtUntil = this.scene.time.now + PLAYER.HURT_ANIM_MS;
+      this.growUntil = 0;
       return false;
     }
     return true;
@@ -188,11 +264,20 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
 
   /** Death animation for a fatal hit: a short hop, then a fall through the floor and off the map. */
   die() {
+    this.isDead = true;
     this.controlsEnabled = false;
+    this.attackZone.body.enable = false;
     this.body.checkCollision.none = true;
     this.setCollideWorldBounds(false);
     this.setAcceleration(0, 0);
     this.setVelocity(0, PLAYER.DEATH_HOP_VELOCITY);
+  }
+
+  /** Level cleared: hold the victory animation until the scene changes. */
+  celebrate() {
+    this.isCelebrating = true;
+    this.clearTint();
+    this.setAlpha(1); // from here on the scene's jarring tween owns the sprite's alpha
   }
 
   /** Puts a fresh small player at the given point, briefly protected, with every other effect cleared. */
@@ -206,6 +291,13 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     this.jumpBufferTimer = 0;
     this.isJumping = false;
     this.controlsEnabled = true;
+    this.isDead = false;
+    this.isCelebrating = false;
+    this.growUntil = 0;
+    this.hurtUntil = 0;
+    this.landUntil = 0;
+    this.airTime = 0;
+    this.attackStartedAt = -Infinity;
     this.clearTint();
     this.setAlpha(1);
     this.setAcceleration(0, 0);
@@ -213,6 +305,7 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
   }
 
   updateEffects() {
+    if (this.isCelebrating) return;
     const phase = Math.floor(this.scene.time.now / PLAYER.FLASH_INTERVAL_MS);
 
     // Nutrient invincibility cycles through a set of tints.
@@ -228,5 +321,65 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     } else if (this.alpha !== 1) {
       this.setAlpha(1);
     }
+  }
+
+  // ---------- animation ----------
+
+  /** Picks the animation for what the player is doing right now. One-shot states outrank movement. */
+  updateAnimation(onGround, delta) {
+    const now = this.scene.time.now;
+
+    if (onGround) {
+      if (this.airTime >= MIN_AIR_MS_FOR_LANDING && !this.isDead) {
+        this.landUntil = now + PLAYER.LAND_ANIM_MS;
+        spawnEffect(this.scene, this.x, this.body.bottom, 'dust-puff', { bottom: true });
+      }
+      this.airTime = 0;
+    } else {
+      this.airTime += delta;
+    }
+
+    let state;
+    if (this.isDead) {
+      state = 'die';
+    } else if (this.isCelebrating) {
+      state = 'victory';
+    } else if (now < this.growUntil) {
+      state = 'grow';
+    } else if (now < this.hurtUntil) {
+      state = 'hurt';
+    } else if (this.isAttacking()) {
+      state = 'attack';
+    } else if (!onGround) {
+      state = this.body.velocity.y > 0 ? 'fall' : 'jump'; // jump plays once on takeoff, fall takes over at the apex
+    } else if (now < this.landUntil) {
+      state = 'land';
+    } else {
+      const speed = Math.abs(this.body.velocity.x);
+      if (speed < PLAYER.IDLE_SPEED) state = 'idle';
+      else state = speed < PLAYER.RUN_SPEED * PLAYER.RUN_ANIM_THRESHOLD ? 'walk' : 'run';
+    }
+    this.showState(state);
+  }
+
+  /**
+   * Shows the animation for a state in the current form, or the form's placeholder when that
+   * animation's sheet is not available, then fits the body to whatever frame is now on screen.
+   */
+  showState(state, force = false) {
+    if (!force && state === this.animState && this.form === this.animForm) return;
+    this.animState = state;
+    this.animForm = this.form;
+
+    const key = state === 'grow' ? 'little-bud-grow' : playerAnim(this.form, state);
+    if (this.scene.anims.exists(key)) {
+      this.play(key);
+    } else {
+      this.anims.stop();
+      this.setTexture(this.isBig ? TEXTURES.PLAYER_BIG : TEXTURES.PLAYER);
+    }
+    // The first fit (from the constructor) places the body from the sprite; later ones keep the feet planted.
+    alignBodyToFrame(this, PLAYER.BODY[this.form], 'bottom', this.bodyFitted === true);
+    this.bodyFitted = true;
   }
 }

@@ -1,19 +1,28 @@
 import Phaser from 'phaser';
 import { ENEMIES } from '../../config/constants.js';
+import { alignBodyToFrame } from '../bodyAlign.js';
+import { spawnEffect } from '../effects.js';
 
 /**
  * Shared enemy behaviour: sleeping until the camera gets close, the touch/stomp/defeat
- * interface the scene relies on, and a ground patrol that turns at walls and ledges.
+ * interface the scene relies on, a ground patrol that turns at walls and ledges, and the art hookup.
  * Subclasses implement act() and may override stomp().
+ *
+ * `art` describes how the enemy looks: { move, death, body, anchor }. move and death are animation
+ * keys (death may be null); body is the fixed physics body size; anchor says whether that body sits
+ * at the bottom of the frame (walkers) or in its centre (flyers). Without the animations the enemy
+ * shows the placeholder texture it was created with.
  */
 export default class Enemy extends Phaser.Physics.Arcade.Sprite {
-  constructor(scene, x, y, texture, options = {}) {
+  constructor(scene, x, y, texture, art, options = {}) {
     super(scene, x, y, texture);
 
     scene.add.existing(this);
     scene.physics.add.existing(this);
 
+    this.art = art;
     this.stompable = true; // false: landing on it hurts like any other touch
+    this.slashable = false; // true: the player's leaf slash kills it
     this.collidesWithGround = true; // flyers turn this off
     this.direction = options.direction ?? -1; // -1 heads left, toward a player coming from the start
     this.activated = false;
@@ -21,11 +30,16 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.harmlessUntil = 0; // scene clock time before which the enemy cannot touch the player
 
     this.setCollideWorldBounds(true);
+    this.showAnimation(art.move);
+    this.faceDirection();
     this.body.enable = false; // asleep: no gravity, no movement, no contact
   }
 
   preUpdate(time, delta) {
     super.preUpdate(time, delta);
+
+    // A death animation that finishes during the line above destroys this enemy, leaving no scene.
+    if (!this.scene) return;
 
     if (this.y > this.scene.map.heightInPixels + ENEMIES.DESPAWN_MARGIN) {
       this.destroy();
@@ -38,6 +52,21 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
       return;
     }
     this.act(time, delta);
+  }
+
+  /** Plays an animation if its sheet loaded, then fits the body to the frame now showing. */
+  showAnimation(key) {
+    const available = Boolean(key) && this.scene.anims.exists(key);
+    if (available) {
+      this.play(key);
+    }
+    alignBodyToFrame(this, this.art.body, this.art.anchor ?? 'bottom');
+    return available;
+  }
+
+  /** The art faces right, so moving left means flipping it. */
+  faceDirection() {
+    this.setFlipX(this.direction < 0);
   }
 
   /** True once the enemy is within the activation range of what the camera currently shows. */
@@ -66,10 +95,21 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.defeat('squash');
   }
 
-  /** Removes the enemy: 'squash' flattens it in place, 'knockout' flips it and drops it off the map. */
-  defeat(style = 'squash') {
+  /**
+   * Removes the enemy. With art: plays the death animation on the spot with a puff of dust.
+   * Without it, 'squash' flattens the placeholder and 'knockout' flips it and drops it off the map.
+   */
+  defeat(style = 'squash', animKey = this.art.death) {
     if (this.defeated) return;
     this.defeated = true;
+
+    if (animKey && this.scene.anims.exists(animKey)) {
+      this.body.enable = false;
+      spawnEffect(this.scene, this.x, this.body.bottom, 'dust-puff', { bottom: true });
+      this.showAnimation(animKey);
+      this.once('animationcomplete', () => this.destroy());
+      return;
+    }
 
     if (style === 'knockout') {
       this.body.checkCollision.none = true;
@@ -84,7 +124,7 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.scene.tweens.add({
       targets: this,
       scaleY: this.scaleY * 0.25,
-      y: this.y + this.displayHeight * 0.375, // keep the flattened sprite sitting on the ground
+      y: this.y + this.body.height * 0.375, // keep the flattened sprite sitting on the ground
       duration: 90,
       onComplete: () => this.scene.time.delayedCall(220, () => this.destroy()),
     });
@@ -101,7 +141,7 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
       this.direction *= -1;
     }
     this.setVelocityX(speed * this.direction);
-    this.setFlipX(this.direction > 0);
+    this.faceDirection();
   }
 
   hasGroundAhead() {

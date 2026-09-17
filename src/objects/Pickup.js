@@ -1,12 +1,15 @@
 import Phaser from 'phaser';
 import { TEXTURES } from '../config/constants.js';
+import { alignBodyToFrame } from './bodyAlign.js';
 
 // Pickup kinds are named after the objects in the Tiled "objects" layer.
+// texture: placeholder shown when the art is missing. idle: looping animation. body: fixed hitbox size
+// (the placeholder's size). anchor: where that hitbox sits in the art frame.
 export const PICKUP_KINDS = {
-  'water-drop': { texture: TEXTURES.WATER_DROP, bob: true },
-  'light-orb': { texture: TEXTURES.LIGHT_ORB, bob: true },
-  nutrient: { texture: TEXTURES.NUTRIENT, bob: true },
-  'goal-jar': { texture: TEXTURES.GOAL_JAR, bob: false },
+  'water-drop': { texture: TEXTURES.WATER_DROP, idle: 'water-drop-idle', body: { width: 16, height: 16 }, anchor: 'center' },
+  'light-orb': { texture: TEXTURES.LIGHT_ORB, idle: 'light-orb-idle', body: { width: 24, height: 24 }, anchor: 'center' },
+  nutrient: { texture: TEXTURES.NUTRIENT, idle: 'nutrient-idle', body: { width: 24, height: 24 }, anchor: 'center' },
+  'goal-jar': { texture: TEXTURES.GOAL_JAR, idle: 'goal-jar-idle', close: 'goal-jar-close', body: { width: 32, height: 64 }, anchor: 'bottom', still: true },
 };
 
 /**
@@ -22,22 +25,34 @@ export default class Pickup extends Phaser.Physics.Arcade.Sprite {
     super(scene, x, y, def.texture);
 
     this.kind = kind;
+    this.def = def;
     this.collected = false;
 
     scene.add.existing(this);
-    scene.physics.add.existing(this, true); // static body: pickups ignore gravity and never move
+    scene.physics.add.existing(this);
+    this.body.setAllowGravity(false); // pickups hang where the level put them
+    this.body.setImmovable(true);
 
-    if (def.bob) {
-      // Visual only. The static body stays put, which is fine for a 3px drift.
-      this.bobTween = scene.tweens.add({
-        targets: this,
-        y: y - 3,
-        duration: 700,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
+    const animated = this.showAnimation(def.idle);
+    if (!animated && !def.still) {
+      // Placeholders get a gentle bob so they still read as pickups. The art has its own idle motion.
+      this.bobTween = scene.tweens.add({ targets: this, y: y - 3, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
+  }
+
+  /** Plays an animation if its sheet loaded, then fits the hitbox to the frame now showing. */
+  showAnimation(key) {
+    const available = Boolean(key) && this.scene.anims.exists(key);
+    if (available) {
+      this.play(key);
+    }
+    alignBodyToFrame(this, this.def.body, this.def.anchor);
+    return available;
+  }
+
+  /** Goal jar only: plays the lid closing. Returns false when that animation is not available. */
+  close() {
+    return this.showAnimation(this.def.close);
   }
 
   /** Plays the vanish effect and removes the pickup. Returns false if it was already taken. */
