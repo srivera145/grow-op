@@ -1,0 +1,23 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "PHP syntax check auth+api",
+			"type": "shell",
+			"command": "php",
+			"args": [
+				"-l",
+				"c:\\xampp\\htdocs\\chore\\includes\\auth.php"
+			]
+		},
+		{
+			"label": "PHP syntax check API",
+			"type": "shell",
+			"command": "php",
+			"args": [
+				"-l",
+				"c:\\xampp\\htdocs\\chore\\api\\mark-chore-complete.php"
+			]
+		}
+	]
+}
