@@ -5,6 +5,8 @@ import SpiderMite from '../objects/enemies/SpiderMite.js';
 import FungusGnat from '../objects/enemies/FungusGnat.js';
 import RootRot from '../objects/enemies/RootRot.js';
 import ParallaxBackground from '../objects/ParallaxBackground.js';
+import { ensureRotateGuard } from './RotateScene.js';
+import { touchControlsWanted } from '../input/TouchSource.js';
 import { ATTACK, CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, PLAYER, RULES, TILESETS, TILE_SIZE } from '../config/constants.js';
 
 // Enemy classes by the object name used in the Tiled "objects" layer.
@@ -92,6 +94,14 @@ export default class GameScene extends Phaser.Scene {
 
     this.levelStartTime = this.time.now;
     this.scene.run('HUDScene');
+
+    // Touch devices: on-screen buttons while the level is in play, and the portrait guard.
+    this.touchControlsShown = false;
+    this.events.once('shutdown', () => this.scene.stop('TouchScene'));
+    this.syncTouchControls();
+    // A touchscreen laptop only gets the buttons once its screen is touched, which can happen mid-level.
+    this.input.on('pointerdown', () => this.syncTouchControls());
+    ensureRotateGuard(this);
   }
 
   /**
@@ -257,6 +267,34 @@ export default class GameScene extends Phaser.Scene {
     return player.body.velocity.y > 0 && feetBefore <= headBefore + ENEMIES.STOMP_TOLERANCE;
   }
 
+  /** Every change of state goes through here so the touch controls always follow it. */
+  setState(state) {
+    this.state = state;
+    this.syncTouchControls();
+  }
+
+  /**
+   * The on-screen buttons exist only while the level is actually being played. They go away on death,
+   * stage clear and game over, and come back on respawn or replay. Desktop never starts them.
+   */
+  syncTouchControls() {
+    if (!touchControlsWanted()) return;
+
+    // Only act on a change. scene.run() on a scene that is already running restarts it, and a restart
+    // makes TouchScene treat the fingers already down as held rather than newly pressed, which would
+    // swallow the very press that triggered it.
+    const show = this.state === 'playing';
+    if (show === this.touchControlsShown) return;
+    this.touchControlsShown = show;
+
+    if (show) {
+      this.scene.run('TouchScene');
+      this.game.events.emit('touch:controls'); // lets the HUD switch its help line to the button names
+    } else {
+      this.scene.stop('TouchScene');
+    }
+  }
+
   /** One point of damage: big players shrink, small unprotected ones lose a life. */
   hitPlayer() {
     if (this.state === 'playing' && this.player.takeHit()) {
@@ -267,7 +305,7 @@ export default class GameScene extends Phaser.Scene {
   // ---------- death and level flow ----------
 
   loseLife(cause) {
-    this.state = 'dead';
+    this.setState('dead');
     this.player.controlsEnabled = false;
     if (cause === 'hit') {
       this.player.die();
@@ -286,13 +324,13 @@ export default class GameScene extends Phaser.Scene {
     this.time.delayedCall(RULES.RESPAWN_DELAY_MS, () => {
       this.player.respawn(this.playerStart.x, this.playerStart.y);
       this.cameras.main.centerOn(this.playerStart.x, this.playerStart.y);
-      this.state = 'playing';
+      this.setState('playing');
     });
   }
 
   /** Goal reached: freeze the player, pop them into the jar, then open the grade screen. */
   completeLevel(jar) {
-    this.state = 'complete';
+    this.setState('complete');
     const player = this.player;
     const timeMs = this.time.now - this.levelStartTime;
 

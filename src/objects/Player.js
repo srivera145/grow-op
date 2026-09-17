@@ -3,6 +3,7 @@ import { ATTACK, PLAYER, TEXTURES } from '../config/constants.js';
 import { playerAnim } from '../config/animations.js';
 import { alignBodyToFrame } from './bodyAlign.js';
 import { spawnEffect } from './effects.js';
+import { touchSource } from '../input/TouchSource.js';
 
 const { KeyCodes, JustDown } = Phaser.Input.Keyboard;
 const NO_INPUT = Object.freeze({ left: false, right: false, jumpHeld: false, jumpPressed: false, attackPressed: false });
@@ -99,12 +100,17 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
     const xJust = JustDown(k.x);
     const jJust = JustDown(k.j);
 
+    // The on-screen buttons are merged in, never substituted: either source can drive any input, and with
+    // no finger on the screen every touch value is false, so this is exactly the keyboard result.
+    // Reading consumes touch's pressed flags, once per frame, the same way JustDown consumed the keys above.
+    const touch = touchSource.read();
+
     return {
-      left: k.left.isDown || k.a.isDown,
-      right: k.right.isDown || k.d.isDown,
-      jumpHeld: k.space.isDown || k.up.isDown || k.w.isDown,
-      jumpPressed: spaceJust || upJust || wJust,
-      attackPressed: xJust || jJust,
+      left: k.left.isDown || k.a.isDown || touch.left,
+      right: k.right.isDown || k.d.isDown || touch.right,
+      jumpHeld: k.space.isDown || k.up.isDown || k.w.isDown || touch.jumpHeld,
+      jumpPressed: spaceJust || upJust || wJust || touch.jumpPressed,
+      attackPressed: xJust || jJust || touch.attackPressed,
     };
   }
 
@@ -171,7 +177,7 @@ export default class Player extends Phaser.Physics.Arcade.Sprite {
   /** Rebound off a stomped enemy. Holding jump turns it into a full-height, cuttable jump. */
   bounce() {
     const k = this.keys;
-    const held = this.controlsEnabled && (k.space.isDown || k.up.isDown || k.w.isDown);
+    const held = this.controlsEnabled && (k.space.isDown || k.up.isDown || k.w.isDown || touchSource.isHeld('jump'));
     this.setVelocityY(held ? PLAYER.JUMP_VELOCITY : PLAYER.STOMP_BOUNCE_VELOCITY);
     this.isJumping = held;
     this.coyoteTimer = 0;

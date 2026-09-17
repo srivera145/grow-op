@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
-import { FIRST_LEVEL, GAME_HEIGHT, GAME_WIDTH, UI } from '../config/constants.js';
+import { FIRST_LEVEL, GAME_HEIGHT, GAME_WIDTH, TOUCH, UI } from '../config/constants.js';
+import { isHandheld, touchControlsWanted } from '../input/TouchSource.js';
+import { ensureRotateGuard } from './RotateScene.js';
 
 const FONT = { fontFamily: 'monospace', color: '#ffffff', stroke: '#000000', strokeThickness: 4 };
 const PROMPT_Y = 430;
@@ -27,7 +29,8 @@ export default class TitleScene extends Phaser.Scene {
       this.add.text(centreX, 258, 'Germination to Cure', { ...FONT, fontSize: '18px', color: '#d8f3dc' }).setOrigin(0.5);
     }
 
-    const prompt = this.add.text(centreX, PROMPT_Y, 'Press Space or Enter to start', { ...FONT, fontSize: '20px' }).setOrigin(0.5);
+    const promptText = touchControlsWanted() ? TOUCH.START_PROMPT : 'Press Space or Enter to start';
+    const prompt = this.add.text(centreX, PROMPT_Y, promptText, { ...FONT, fontSize: '20px' }).setOrigin(0.5);
     this.tweens.add({ targets: prompt, alpha: 0.25, duration: 650, yoyo: true, repeat: -1 });
 
     this.add.text(centreX, GAME_HEIGHT - 24, 'EchoDial LLC', { ...FONT, fontSize: '12px' }).setOrigin(0.5).setAlpha(0.6);
@@ -35,7 +38,23 @@ export default class TitleScene extends Phaser.Scene {
     // event.repeat filters out a key that is still held down from the previous scene.
     this.input.keyboard.on('keydown-SPACE', (event) => !event.repeat && this.startGame());
     this.input.keyboard.on('keydown-ENTER', (event) => !event.repeat && this.startGame());
-    this.input.on('pointerup', () => this.startGame());
+    this.input.on('pointerup', () => {
+      this.enterFullscreenOnHandheld();
+      this.startGame();
+    });
+
+    ensureRotateGuard(this);
+  }
+
+  /**
+   * Phones and tablets go fullscreen on the first tap, which hides the browser's bars. It has to happen
+   * inside the tap itself, because browsers only allow fullscreen from a user gesture. Desktop never asks,
+   * and neither does a browser without the API (Safari on iPhone), where this quietly does nothing.
+   */
+  enterFullscreenOnHandheld() {
+    if (isHandheld() && this.scale.fullscreen.available && !this.scale.isFullscreen) {
+      this.scale.startFullscreen();
+    }
   }
 
   /** A quick pop-in, then a slow float. Only position, scale and alpha are tweened; rotation would shred pixel art. */

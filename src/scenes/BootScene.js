@@ -41,9 +41,8 @@ export default class BootScene extends Phaser.Scene {
     }
     this.load.image(UI.LOGO.key, UI.LOGO.file);
     request(UI.LOGO.key);
-    const icons = UI.HUD_ICONS;
-    this.load.spritesheet(icons.key, icons.file, { frameWidth: icons.frameSize, frameHeight: icons.frameSize });
-    request(icons.key);
+    this.load.image(UI.HUD_ICONS.key, UI.HUD_ICONS.file); // cut into one frame per icon in sliceHudIcons()
+    request(UI.HUD_ICONS.key);
   }
 
   create() {
@@ -52,6 +51,7 @@ export default class BootScene extends Phaser.Scene {
 
     this.makePlaceholders();
     this.sliceStrips();
+    this.sliceHudIcons();
     createAnimations(this);
     this.reportArt();
 
@@ -125,6 +125,66 @@ export default class BootScene extends Phaser.Scene {
         texture.add(i, 0, Math.floor(i * frameWidth), 0, Math.floor(frameWidth), image.height);
       }
     }
+  }
+
+  /**
+   * Cuts the HUD icon sheet into one frame per icon, numbered from the left. The icons are found by looking
+   * for the empty columns between them, and each frame is the tight box around its icon, so icons of
+   * different sizes, or ones that stray over an even grid line, still come out whole and unmixed.
+   * If that does not find the expected number of icons, it falls back to equal cells.
+   */
+  sliceHudIcons() {
+    const { key, COUNT } = UI.HUD_ICONS;
+    if (!this.textures.exists(key)) return;
+
+    const texture = this.textures.get(key);
+    const image = texture.getSourceImage();
+    const { width, height } = image;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    const inked = (x, y) => pixels[(y * width + x) * 4 + 3] > 8;
+
+    // Runs of columns that contain anything at all.
+    const runs = [];
+    let start = -1;
+    for (let x = 0; x <= width; x++) {
+      let columnInked = false;
+      for (let y = 0; x < width && y < height && !columnInked; y++) columnInked = inked(x, y);
+      if (columnInked && start < 0) start = x;
+      if (!columnInked && start >= 0) {
+        runs.push([start, x - 1]);
+        start = -1;
+      }
+    }
+
+    if (runs.length === COUNT) {
+      runs.forEach(([left, right], index) => {
+        let top = height;
+        let bottom = -1;
+        for (let y = 0; y < height; y++) {
+          for (let x = left; x <= right; x++) {
+            if (inked(x, y)) {
+              top = Math.min(top, y);
+              bottom = Math.max(bottom, y);
+              break;
+            }
+          }
+        }
+        texture.add(index, 0, left, top, right - left + 1, bottom - top + 1);
+      });
+    } else {
+      console.warn(`[boot] ${key}.png: expected ${COUNT} separate icons but found ${runs.length}; cutting it into ${COUNT} equal cells instead`);
+      const cell = Math.floor(width / COUNT);
+      for (let index = 0; index < COUNT; index++) texture.add(index, 0, index * cell, 0, cell, height);
+    }
+
+    // The icons are smooth, anti-aliased art shown smaller than they are drawn. The game's hard-pixel
+    // filtering would make that jagged, so this one texture is filtered smoothly.
+    texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
   }
 
   reportArt() {

@@ -2,10 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Grow Op</title>
     <!-- Inline placeholder icon so the browser does not request a missing /favicon.ico -->
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%231b2a1f'/><rect x='4' y='4' width='8' height='8' fill='%234cd137'/></svg>" />
+    <link rel="icon" href="assets/favicon.png" />
     <style>
       html,
       body {
@@ -15,10 +15,27 @@
         height: 100%;
         background: #000;
         overflow: hidden;
+        overscroll-behavior: none; /* no pull-to-refresh or rubber-band scrolling under a dragging thumb */
+        -webkit-user-select: none;
+        user-select: none; /* a long press must not start a text selection */
+        -webkit-touch-callout: none;
+      }
+      body {
+        /* viewport-fit=cover lets the page run under the notch and home indicator; this padding keeps the game,
+           and so the touch buttons, inside the safe area. It is zero everywhere else. */
+        box-sizing: border-box;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
       }
       #game {
         width: 100%;
         height: 100%;
+      }
+      #game,
+      canvas {
+        touch-action: none; /* no double-tap zoom, no page scroll or pinch while playing */
+        -webkit-tap-highlight-color: transparent;
+        -webkit-user-select: none;
+        user-select: none;
       }
       canvas {
         display: block;

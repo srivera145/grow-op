@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { GAME_HEIGHT, GAME_WIDTH, UI } from '../config/constants.js';
+import { GAME_HEIGHT, GAME_WIDTH, TOUCH, UI } from '../config/constants.js';
+import { touchControlsWanted } from '../input/TouchSource.js';
 
 const TEXT_STYLE = {
   fontFamily: 'monospace',
@@ -47,11 +48,11 @@ export default class HUDScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setAlpha(0);
-    this.add
-      .text(16, GAME_HEIGHT - 12, 'Move: Arrows / A D    Jump: Space / Up / W    Slash: X / J', { ...TEXT_STYLE, fontSize: '12px', strokeThickness: 3 })
-      .setOrigin(0, 1)
-      .setScrollFactor(0)
-      .setAlpha(0.6);
+    // Help line: key names in the bottom-left corner. When the touch controls are up it names the buttons
+    // instead and moves to the bottom centre, clear of the two button clusters.
+    this.helpText = this.add.text(0, 0, '', { ...TEXT_STYLE, fontSize: '12px', strokeThickness: 3 }).setScrollFactor(0).setAlpha(0.6);
+    this.showHelp(touchControlsWanted());
+    this.game.events.on('touch:controls', this.showTouchHelp, this);
 
     this.refresh();
 
@@ -64,17 +65,32 @@ export default class HUDScene extends Phaser.Scene {
       this.registry.events.off('setdata', this.refresh, this);
       this.registry.events.off('changedata', this.refresh, this);
       this.game.events.off('hud:message', this.showMessage, this);
+      this.game.events.off('touch:controls', this.showTouchHelp, this);
     });
+  }
+
+  showTouchHelp() {
+    this.showHelp(true);
+  }
+
+  showHelp(touch) {
+    if (touch) {
+      this.helpText.setText(TOUCH.HELP.text).setOrigin(0.5, 1).setPosition(TOUCH.HELP.x, TOUCH.HELP.y);
+    } else {
+      this.helpText.setText('Move: Arrows / A D    Jump: Space / Up / W    Slash: X / J').setOrigin(0, 1).setPosition(16, GAME_HEIGHT - 12);
+    }
   }
 
   /** One icon with its value beside it. Returns the text object that shows the value. */
   addReadout({ x, y, frame, label }) {
     const icons = UI.HUD_ICONS;
-    const size = icons.frameSize * icons.scale;
+    const size = icons.SLOT;
     let textX = x;
 
     if (this.useIcons) {
-      this.add.image(x, y, icons.key, frame).setOrigin(0, 0).setScale(icons.scale).setScrollFactor(0);
+      // Each icon has its own size: fit it inside the slot, keeping its proportions, centred.
+      const icon = this.add.image(x + size / 2, y + size / 2, icons.key, frame).setScrollFactor(0);
+      icon.setScale(Math.min(size / icon.width, size / icon.height));
       textX = x + size + 8;
     }
     const text = this.add.text(textX, y + size / 2, '', TEXT_STYLE).setOrigin(0, 0.5).setScrollFactor(0);

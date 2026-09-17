@@ -40,7 +40,7 @@ export const TILESETS = {
   'tiles-tent-floor': { file: 'assets/tiles/tiles-tent-floor.png', tileCount: 3, columns: 3 },
 };
 
-// Interface images. hud-icons is a strip of 16x16 frames; FRAME names which frame shows what.
+// Interface images. hud-icons is one row of icons; FRAME names which icon, counted from the left, shows what.
 export const UI = {
   LOGO: {
     key: 'logo-growop',
@@ -55,10 +55,35 @@ export const UI = {
   HUD_ICONS: {
     key: 'hud-icons',
     file: 'assets/sheets/hud-icons.png',
-    frameSize: 16,
-    scale: 2,
+    // The icons are different sizes and do not sit on an even grid (Little Bud's head is wider than a fifth of
+    // the sheet), so BootScene finds each icon's own bounds in the image instead of cutting equal cells.
+    // In the HUD every icon is scaled, keeping its proportions, to fit a SLOT x SLOT box and centred in it.
+    COUNT: 5,
+    SLOT: 32,
     FRAME: { DROPS: 0, LIVES: 1, SCORE: 2, TIME: 3, WORLD: 4 },
   },
+};
+
+// On-screen touch controls, in game units on the 960x540 canvas. Only used when the device reports touch
+// support (or the page is opened with ?touch=1).
+//  - Buttons are BUTTON_SIZE square. The bottom row sits exactly over the 64px band of floor at the bottom of
+//    the view, so it never covers the player; slash sits just above and inboard of jump.
+//  - x, y is the centre of the drawn button. `hit` is the touch-sensitive area: larger than the drawing,
+//    reaching the screen edges, and the left and right areas meet so a sliding thumb never crosses a dead strip.
+//  - Buttons rest at ALPHA_REST so the level shows through, and go to ALPHA_HELD while pressed.
+export const TOUCH = {
+  ALPHA_REST: 0.35,
+  ALPHA_HELD: 1,
+  BUTTON_SIZE: 64,
+  BUTTONS: {
+    left: { x: 48, y: 508, icon: 'left', hit: { x: 0, y: 452, width: 88, height: 88 } },
+    right: { x: 128, y: 508, icon: 'right', hit: { x: 88, y: 452, width: 96, height: 88 } },
+    jump: { x: 904, y: 508, icon: 'jump', label: 'JUMP', hit: { x: 860, y: 468, width: 100, height: 72 } },
+    attack: { x: 828, y: 436, icon: 'slash', label: 'SLASH', hit: { x: 788, y: 396, width: 80, height: 72 } },
+  },
+  HELP: { x: 480, y: 528, text: 'Move: arrow buttons    Jump: JUMP    Slash: SLASH' }, // bottom centre, between the two clusters
+  START_PROMPT: 'Tap to start',
+  ROTATE: { title: 'Rotate your device', subtitle: 'Grow Op plays in landscape', backdropAlpha: 0.94 },
 };
 
 // Levels are Tiled JSON maps served from public/levels. `tileset` names an entry in TILESETS and the
