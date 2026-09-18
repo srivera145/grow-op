@@ -18,51 +18,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { autotile, serialize } from './autotile-core.mjs';
 
 const LEVEL_DIR = 'public/levels';
 const LAYER_NAME = 'ground';
 const TILESET_NAME = 'tiles-soil';
-
-/** New gids for a row-major tile grid. `data` is not modified. */
-export function autotile(data, width, height, firstGid) {
-  const solid = (col, row) => col < 0 || row < 0 || col >= width || row >= height || data[row * width + col] !== 0;
-
-  return data.map((gid, index) => {
-    if (gid === 0) return 0;
-    const col = index % width;
-    const row = Math.floor(index / width);
-    const up = solid(col, row - 1);
-    const down = solid(col, row + 1);
-    const left = solid(col - 1, row);
-    const right = solid(col + 1, row);
-
-    const setRow = !up ? 0 : !down ? 2 : 1;
-    const setCol = !left && right ? 0 : left && !right ? 2 : 1;
-    return firstGid + setRow * 3 + setCol;
-  });
-}
-
-/** Stable, diff-friendly JSON: one map row per line in tile layers, one object per line in object layers. */
-export function serialize(map) {
-  const blocks = [];
-  const stash = (lines) => {
-    blocks.push(lines.length ? `[\n        ${lines.join(',\n        ')}\n      ]` : '[]');
-    return `@@block${blocks.length - 1}@@`;
-  };
-
-  const copy = structuredClone(map);
-  for (const layer of copy.layers) {
-    if (Array.isArray(layer.data)) {
-      const rows = [];
-      for (let r = 0; r < layer.height; r++) rows.push(layer.data.slice(r * layer.width, (r + 1) * layer.width).join(','));
-      layer.data = stash(rows);
-    }
-    if (Array.isArray(layer.objects)) {
-      layer.objects = stash(layer.objects.map((object) => JSON.stringify(object)));
-    }
-  }
-  return JSON.stringify(copy, null, 2).replace(/"@@block(\d+)@@"/g, (match, i) => blocks[Number(i)]) + '\n';
-}
 
 function processFile(file, checkOnly) {
   const original = fs.readFileSync(file, 'utf8');
@@ -106,6 +66,9 @@ function main() {
   }
   process.exit(checkOnly && outOfDate > 0 ? 1 : 0);
 }
+
+// Re-exported so this file stays the one place the command line reaches for.
+export { autotile, serialize };
 
 // Run only when called from the command line, so the functions above can be imported elsewhere.
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

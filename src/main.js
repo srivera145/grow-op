@@ -6,7 +6,7 @@ import HUDScene from './scenes/HUDScene.js';
 import LevelCompleteScene from './scenes/LevelCompleteScene.js';
 import TouchScene from './scenes/TouchScene.js';
 import RotateScene from './scenes/RotateScene.js';
-import { GAME_WIDTH, GAME_HEIGHT, GRAVITY_Y } from './config/constants.js';
+import { GAME_WIDTH, GAME_HEIGHT, GRAVITY_Y, LEVELS } from './config/constants.js';
 
 const config = {
   type: Phaser.AUTO,
@@ -61,4 +61,18 @@ if (window.screen.orientation && window.screen.orientation.addEventListener) {
 // Dev-only handle for console debugging and automated smoke tests. Stripped from production builds.
 if (import.meta.env.DEV) {
   window.__growop = game;
+}
+
+/**
+ * Dev-only: ?level=<key> starts that level instead of FIRST_LEVEL. This is what the level editor's Play
+ * button opens. A key that is not in LEVELS yet - a level being written right now - gets an entry made
+ * for it on the spot, pointing at the file the editor saves to, so a new level is playable before anyone
+ * has registered it. import.meta.env.DEV is a literal false in a build, so the whole block is dropped.
+ */
+if (import.meta.env.DEV) {
+  const wanted = new URLSearchParams(window.location.search).get('level');
+  if (wanted && /^[a-z0-9-]+$/.test(wanted)) {
+    LEVELS[wanted] ??= { key: wanted, name: wanted, label: wanted, file: `levels/${wanted}.json`, tileset: 'tiles-soil', next: wanted };
+    game.registry.set('startLevel', wanted);
+  }
 }

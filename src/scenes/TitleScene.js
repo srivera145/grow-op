@@ -200,6 +200,7 @@ export default class TitleScene extends Phaser.Scene {
     Sfx.stopMusic(); // the level's own track takes over once it is built
     Sfx.unlock(); // the start press may itself be the first gesture
     Sfx.play('menu-select');
-    this.scene.start('GameScene', { level: FIRST_LEVEL, reset: true });
+    // startLevel is only ever set by main.js in dev, from ?level=; everywhere else this is FIRST_LEVEL.
+    this.scene.start('GameScene', { level: this.registry.get('startLevel') ?? FIRST_LEVEL, reset: true });
   }
 }

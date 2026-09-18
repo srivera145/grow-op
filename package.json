@@ -11,6 +11,7 @@
     "autotile": "node tools/autotile.mjs",
     "check-levels": "node tools/check-level-score.mjs",
     "smoke": "node tests/run.js",
+    "editor": "vite --open /editor.html",
     "audio": "node tools/make-audio.mjs"
   },
   "dependencies": {
