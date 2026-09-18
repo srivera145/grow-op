@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
@@ -22,13 +22,21 @@ function levelSaver() {
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use('/api/level', async (request, response, next) => {
-        if (request.method !== 'POST') return next();
+        const reply = replier(response);
 
-        const reply = (status, body) => {
-          response.statusCode = status;
-          response.setHeader('Content-Type', 'application/json');
-          response.end(JSON.stringify(body));
-        };
+        // DELETE /api/level/<key> - removes a level and its entry. Mounted on the same path as the save,
+        // so the key arrives as the remainder of the URL.
+        if (request.method === 'DELETE') {
+          const key = decodeURIComponent((request.url ?? '').split('?')[0].replace(/^\//, ''));
+
+          try {
+            return reply(...(await deleteLevel(key, server)));
+          } catch (error) {
+            return reply(500, { error: error.message });
+          }
+        }
+
+        if (request.method !== 'POST') return next();
 
         try {
           const body = await readBody(request);
@@ -83,11 +91,7 @@ function levelSaver() {
       server.middlewares.use('/api/level-index', async (request, response, next) => {
         if (request.method !== 'POST') return next();
 
-        const reply = (status, body) => {
-          response.statusCode = status;
-          response.setHeader('Content-Type', 'application/json');
-          response.end(JSON.stringify(body));
-        };
+        const reply = replier(response);
 
         try {
           const { index } = JSON.parse(await readBody(request));
@@ -121,6 +125,60 @@ function levelSaver() {
     },
   };
 }
+
+/**
+ * Removes a level: its index entry first, then its file.
+ *
+ * That order is the point. A dangling entry - one naming a file that is not there - is the failure this
+ * exists to stop causing, so if the file delete fails the index is already consistent with a level that
+ * simply is not registered any more, and the worst case is an orphan map nobody reads. The other way
+ * round leaves the game refusing to start.
+ *
+ * An entry whose next is implicit needs no repair: it means "the one after me", which the shortened list
+ * re-derives on its own. An entry that explicitly names this level is refused rather than rewritten,
+ * because quietly repointing somebody's deliberate ordering is worse than making them look at it.
+ *
+ * @returns [statusCode, body] for the caller to send
+ */
+async function deleteLevel(key, server) {
+  if (!NAME_PATTERN.test(key)) {
+    return [400, { error: 'a level name may only use a-z, 0-9 and dashes' }];
+  }
+
+  const index = await readIndex();
+  if (!index.some((entry) => entry.key === key)) {
+    return [404, { error: `"${key}" is not in the level index` }];
+  }
+
+  if (index.length <= 1) {
+    return [409, { error: `"${key}" is the only level there is. A game with no levels cannot start.` }];
+  }
+
+  const pointedAtBy = index.find((entry) => entry.key !== key && entry.next === key);
+  if (pointedAtBy) {
+    return [409, {
+      error: `"${pointedAtBy.key}" explicitly leads to "${key}". Change that entry's next in Level order first.`,
+    }];
+  }
+
+  await writeIndex(index.filter((entry) => entry.key !== key));
+
+  let fileRemoved = true;
+  try {
+    await rm(join(LEVEL_DIR, `${key}.json`));
+  } catch {
+    fileRemoved = false; // the entry is already gone, so nothing dangles; this is just an orphan file
+  }
+
+  server.config.logger.info(`  level deleted  ${key}${fileRemoved ? '' : '  (entry only: its file was already gone)'}`);
+  return [200, { ok: true, key, fileRemoved, levels: index.length - 1 }];
+}
+
+const replier = (response) => (status, body) => {
+  response.statusCode = status;
+  response.setHeader('Content-Type', 'application/json');
+  response.end(JSON.stringify(body));
+};
 
 async function readIndex() {
   try {

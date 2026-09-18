@@ -497,6 +497,7 @@ const palette = new Palette(document.getElementById('palette'), {
       say(`Could not write the level list (${error.message}).`, 'error');
     }
   },
+  onDelete: () => deleteLevel(nameInput.value.trim()),
   onResize: (width, height) => {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width < 8 || height < 8) {
       say('Width and height have to be at least 8 tiles.', 'error');
@@ -582,6 +583,50 @@ function applyMeta(key) {
 /** The level exactly as it would be written to disk. */
 function currentText() {
   return serializeLevel({ map: level.map, width: grid.width, height: grid.height, cells: grid.cells, objects: objects.list, nextObjectId: objects.nextId });
+}
+
+/**
+ * Removes a level and its registration.
+ *
+ * The key has to be typed out to go ahead. This throws away authored work with nothing to undo it, and a
+ * button that only needs one careless click is the wrong shape for that; a name typed on purpose cannot
+ * be a slip. The server does the refusing - last level, or another entry pointing here - because it is
+ * the one holding the list.
+ */
+async function deleteLevel(key) {
+  if (!NAME_PATTERN.test(key)) {
+    say('A level name may only use a-z, 0-9 and dashes.', 'error');
+    return;
+  }
+
+  const typed = window.prompt(
+    `Delete ${key}?
+
+This removes public/levels/${key}.json and its entry in the level list. `
+      + `It cannot be undone.
+
+Type the level key to confirm:`,
+  );
+  if (typed === null) return;
+  if (typed.trim() !== key) {
+    say('That did not match the level key, so nothing was deleted.', 'warn');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/level/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+
+    await loadIndex();
+    // Whatever is left is what the editor should be showing; sitting on a level that is gone is worse.
+    const next = levelIndex[0]?.key ?? '';
+    nameInput.value = next;
+    await loadLevel(next);
+    say(`Deleted ${key}${body.fileRemoved ? '' : ' (its file was already gone)'}.`);
+  } catch (error) {
+    say(`Could not delete ${key}: ${error.message}`, 'error');
+  }
 }
 
 document.getElementById('load').addEventListener('click', () => loadLevel(nameInput.value.trim()));
@@ -675,6 +720,8 @@ if (import.meta.env.DEV) {
     setMeta: (meta) => palette.setMeta(meta),
     saveIndex: (index) => palette.handlers.onSaveIndex(index ?? palette.readIndex()),
     reorder: (from, to) => palette.handlers.onReorder(from, to),
+    remove: (key) => deleteLevel(key),
+    tilesetOptions: () => [...document.querySelectorAll('.fields select[name="tileset"] option')].map((o) => o.value),
     text: () => currentText(),
   };
 }

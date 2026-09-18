@@ -31,6 +31,7 @@ with no edits gives back a byte-identical file.
 | Middle drag, or Space + drag | pan |
 | Wheel | zoom, 0.5x to 4x, around the pointer |
 | Click a type in the palette | arm it, then click the canvas to place one |
+| Delete this level | remove it and its entry, after typing the key |
 | Drag an object | move it |
 | Alt while placing or dragging | ignore the grid |
 | Delete | remove the selected object |
@@ -73,7 +74,8 @@ used, and the game fetches it before it starts.
 ```
 
 Only `key` is required. `name` falls back to the key, `label` to the key's trailing segment, `tileset` to
-`tiles-soil`. A level's file is always `levels/<key>.json`, worked out rather than stored, so a key and
+`tiles-soil`. Tileset is a dropdown built from `TILESETS` in `constants.js`, not free text: the tilesets
+are a fixed set the game knows how to load, and a typo only shows up later as a level that will not build. A level's file is always `levels/<key>.json`, worked out rather than stored, so a key and
 its file cannot drift apart.
 
 The order is the order of the game. The first entry is where a new game starts, and each level's Next is
@@ -89,9 +91,33 @@ or next, then press *Save level order*. That rewrites the whole file, which is w
 and not something that happens when you save a level.
 
 The route refuses a key that is not `a-z`, `0-9` and dashes, and refuses to write a list naming a level
-whose file is not there. If a level file does go missing while its entry remains, the game says so on the
-page at startup and does not start - there is no way to remove an entry from the editor yet, so that is
-currently a hand edit of `index.json`.
+whose file is not there.
+
+**Delete this level** removes the entry and `public/levels/<key>.json`, in that order - so if the file
+delete fails, the worst case is an orphan map nobody reads rather than an entry pointing at nothing. It
+asks you to type the level key first, because it throws away authored work and there is no undo.
+
+Two deletes are refused:
+
+- the last remaining level, since a game with no levels cannot start;
+- a level another entry's **explicit** `next` points at. The refusal names that entry, so you can change
+  it in Level order and try again. An entry whose next is implicit needs nothing: it means "the one after
+  me", which the shortened list re-derives.
+
+## When a level file is missing
+
+An index entry with no map behind it is handled differently depending on who is looking.
+
+**In development it stops the game**, naming the file, because it is a mistake somebody is making right
+now and the fastest thing is to say so.
+
+**In a production build it is skipped.** The game boots with the levels it does have and writes one
+`console.warn` naming what it dropped. A deploy that went out with one file missing should cost that one
+level, not the whole game. If *nothing* usable is left it still stops, because there is genuinely nothing
+to play.
+
+A dropped level does not break the chain: implicit `next` values re-derive over the survivors, and an
+explicit `next` pointing at a dropped level moves on to whatever survived after it.
 
 ## The checks panel
 

@@ -1,3 +1,4 @@
+import { TILESETS } from '../config/constants.js';
 import { OBJECT_TYPES } from './format.js';
 
 /**
@@ -10,7 +11,7 @@ import { OBJECT_TYPES } from './format.js';
 export class Palette {
   /**
    * @param root the container element
-   * @param handlers { onTool, onObjectType, onResize, onReorder, onSaveIndex }
+   * @param handlers { onTool, onObjectType, onResize, onReorder, onSaveIndex, onDelete }
    */
   constructor(root, handlers) {
     this.root = root;
@@ -100,10 +101,43 @@ export class Palette {
     box.className = 'fields';
     const name = this.field('Name', 'name');
     const label = this.field('Label', 'label');
-    const tileset = this.field('Tileset', 'tileset', 'tiles-soil');
+    const tileset = this.tilesetField();
+
     this.metaInputs = { name: name.input, label: label.input, tileset: tileset.input };
     box.append(name.wrapper, label.wrapper, tileset.wrapper);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.id = 'delete-level';
+    remove.className = 'danger';
+    remove.textContent = 'Delete this level';
+    remove.addEventListener('click', () => this.handlers.onDelete());
+    box.append(remove);
+
     return box;
+  }
+
+  /**
+   * A list, not a box to type in. The tilesets are a fixed set the game knows how to load, and a typo in
+   * a free-text field only shows up as a level that will not build.
+   */
+  tilesetField() {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'field';
+    const text = document.createElement('span');
+    text.textContent = 'Tileset';
+
+    const input = document.createElement('select');
+    input.name = 'tileset';
+    for (const key of Object.keys(TILESETS)) {
+      const option = document.createElement('option');
+      option.value = key;
+      option.textContent = key;
+      input.append(option);
+    }
+
+    wrapper.append(text, input);
+    return { wrapper, input };
   }
 
   /** What the level being edited should be registered as. Blanks are filled in by the caller. */
@@ -118,7 +152,8 @@ export class Palette {
   setMeta({ name = '', label = '', tileset = 'tiles-soil' }) {
     this.metaInputs.name.value = name;
     this.metaInputs.label.value = label;
-    this.metaInputs.tileset.value = tileset;
+    // A level registered with a tileset this build no longer has would otherwise select nothing at all.
+    this.metaInputs.tileset.value = TILESETS[tileset] ? tileset : Object.keys(TILESETS)[0];
   }
 
   sizeControls() {
