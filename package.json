@@ -10,12 +10,14 @@
     "preview": "vite preview",
     "autotile": "node tools/autotile.mjs",
     "check-levels": "node tools/check-level-score.mjs",
+    "smoke": "node tests/run.js",
     "audio": "node tools/make-audio.mjs"
   },
   "dependencies": {
     "phaser": "3.90.0"
   },
   "devDependencies": {
+    "puppeteer-core": "25.11.0",
     "vite": "8.3.0"
   },
   "engines": {
