@@ -99,6 +99,15 @@ export default class Enemy extends Phaser.Physics.Arcade.Sprite {
   }
 
   /**
+   * Called by the scene when the player walks through this enemy under a nutrient. Its own method
+   * rather than a defeat() call at the scene, so an enemy that leaves something behind when it dies
+   * can leave the same thing behind however it was killed.
+   */
+  knockout() {
+    this.defeat('knockout');
+  }
+
+  /**
    * Removes the enemy. With art: plays the death animation on the spot with a puff of dust.
    * Without it, 'squash' flattens the placeholder and 'knockout' flips it and drops it off the map.
    * `sound` is what it says as it goes.

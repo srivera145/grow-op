@@ -1,12 +1,9 @@
 import Phaser from 'phaser';
 import { FIRST_LEVEL, GAME_WIDTH, GRADES, LEVELS } from '../config/constants.js';
 import Sfx from '../audio/Sfx.js';
+import Save from '../state/Save.js';
+import { gradeFor, maxScoreForLevel, percentOf } from '../state/levelScore.js';
 import { addMuteButton } from '../audio/muteButton.js';
-
-/** The harvest grade a final score earns. GRADES is ordered best first. */
-export function gradeForScore(score) {
-  return GRADES.find((grade) => score >= grade.minScore) ?? GRADES[GRADES.length - 1];
-}
 
 /** Formats milliseconds as m:ss.t */
 export function formatTime(ms) {
@@ -18,6 +15,15 @@ export function formatTime(ms) {
 
 const FONT = { fontFamily: 'monospace', color: '#ffffff', stroke: '#000000', strokeThickness: 4 };
 const INPUT_DELAY_MS = 400; // ignore keys still held from the level for a moment
+const RECORD_COLOR = '#ffd60a'; // a value on this run that beat the stored one
+const PREVIOUS_COLOR = '#9bbf9b'; // the stored column, dimmer than this run's
+const NO_VALUE = '--'; // stands in for a previous best that does not exist yet
+
+// The three columns of the results table: row label, this level, the best before this run. Wider than
+// the values strictly need, because the score row carries "1700 / 2910  58%" rather than a bare number.
+const LABEL_X = GAME_WIDTH / 2 - 230;
+const RUN_X = GAME_WIDTH / 2 + 80;
+const PREVIOUS_X = GAME_WIDTH / 2 + 230;
 
 /**
  * Harvest report shown after the goal jar: score, drops, time and the grade the score earns.
@@ -29,9 +35,12 @@ export default class LevelCompleteScene extends Phaser.Scene {
   }
 
   init(data = {}) {
+    // score is what this level earned: it is what gets graded and recorded. runTotal is the running
+    // figure the HUD was showing, which carries into the next level; the two differ only after a Next.
     this.result = {
       level: data.level ?? FIRST_LEVEL,
       score: data.score ?? 0,
+      runTotal: data.runTotal ?? data.score ?? 0,
       drops: data.drops ?? 0,
       timeMs: data.timeMs ?? 0,
     };
@@ -41,22 +50,40 @@ export default class LevelCompleteScene extends Phaser.Scene {
   create() {
     const level = LEVELS[this.result.level] ?? LEVELS[FIRST_LEVEL];
     const centreX = GAME_WIDTH / 2;
-    this.grade = gradeForScore(this.result.score);
+    // Graded against this level's own maximum, so the same grade means the same thing on every level.
+    this.maxScore = maxScoreForLevel(this.result.level);
+    this.grade = gradeFor(this.result.score, this.maxScore);
     this.cameras.main.setBackgroundColor('#101a13');
 
-    this.add.text(centreX, 64, 'HARVEST REPORT', { ...FONT, fontSize: '36px' }).setOrigin(0.5);
-    this.add.text(centreX, 106, level.name, { ...FONT, fontSize: '18px', color: '#d8f3dc' }).setOrigin(0.5);
+    // Filed before anything is drawn. recordCompletion hands back the record table as it was on arrival,
+    // which is what the right-hand column shows, so the new result never overwrites what it is compared to.
+    const { previous, records, hadPrevious } = Save.recordCompletion(this.result.level, {
+      score: this.result.score,
+      grade: this.grade.name,
+      timeMs: this.result.timeMs,
+      drops: this.result.drops,
+    });
 
-    this.scoreText = this.addRow(170, 'Score', String(this.result.score));
-    this.dropsText = this.addRow(204, 'Drops', String(this.result.drops));
-    this.timeText = this.addRow(238, 'Time', formatTime(this.result.timeMs));
+    this.add.text(centreX, 52, 'HARVEST REPORT', { ...FONT, fontSize: '36px' }).setOrigin(0.5);
+    this.add.text(centreX, 88, level.name, { ...FONT, fontSize: '18px', color: '#d8f3dc' }).setOrigin(0.5);
 
-    this.add.text(centreX, 292, 'GRADE', { ...FONT, fontSize: '16px', color: '#d8f3dc' }).setOrigin(0.5);
+    this.add.text(RUN_X, 124, 'THIS LEVEL', { ...FONT, fontSize: '14px', color: '#d8f3dc' }).setOrigin(1, 0.5);
+    this.add.text(PREVIOUS_X, 124, 'PREV BEST', { ...FONT, fontSize: '14px', color: PREVIOUS_COLOR }).setOrigin(1, 0.5);
+
+    // A first completion beats nothing, so its records are shown plainly with an empty column beside them.
+    this.addRow(154, 'Score', this.scoreLine(), String(previous.score), records.score && hadPrevious, hadPrevious);
+    this.addRow(184, 'Drops', String(this.result.drops), String(previous.drops), records.drops && hadPrevious, hadPrevious);
+    this.addRow(214, 'Time', formatTime(this.result.timeMs), formatTime(previous.timeMs), records.timeMs && hadPrevious, hadPrevious);
+    this.addRunTotal(244);
+
+    this.add.text(centreX, 276, 'GRADE', { ...FONT, fontSize: '16px', color: '#d8f3dc' }).setOrigin(0.5);
     this.gradeText = this.add
-      .text(centreX, 344, this.grade.name, { ...FONT, fontSize: '56px', color: this.grade.color, strokeThickness: 6 })
+      .text(centreX, 320, this.grade.name, { ...FONT, fontSize: '56px', color: this.grade.color, strokeThickness: 6 })
       .setOrigin(0.5)
       .setScale(0.2);
     this.tweens.add({ targets: this.gradeText, scale: 1, duration: 350, ease: 'Back.easeOut' });
+    this.addPreviousGrade(360, previous, hadPrevious);
+    this.addRecordBanner(396, records, hadPrevious);
 
     this.replayButton = this.addButton(centreX - 110, 450, 'Replay', () => this.replay());
     this.nextButton = this.addButton(centreX + 110, 450, 'Next', () => this.next());
@@ -70,10 +97,57 @@ export default class LevelCompleteScene extends Phaser.Scene {
     });
   }
 
-  addRow(y, label, value) {
+  /**
+   * The score as a share of everything this level had to offer, so a player can see what they missed.
+   * Falls back to the bare score when the level's maximum is unknown, which is when grading does too.
+   */
+  scoreLine() {
+    const { score } = this.result;
+    if (this.maxScore <= 0) return String(score);
+    return `${score} / ${this.maxScore}   ${percentOf(score, this.maxScore)}%`;
+  }
+
+  /** One results row: its label, this run's value, and the stored one. A beaten record turns gold. */
+  addRow(y, label, value, previousValue, isRecord, hadPrevious) {
+    const size = { ...FONT, fontSize: '20px' };
+    this.add.text(LABEL_X, y, label, { ...size, color: '#d8f3dc' }).setOrigin(0, 0.5);
+    this.add.text(RUN_X, y, value, { ...size, color: isRecord ? RECORD_COLOR : '#ffffff' }).setOrigin(1, 0.5);
+    this.add.text(PREVIOUS_X, y, hadPrevious ? previousValue : NO_VALUE, { ...size, color: PREVIOUS_COLOR }).setOrigin(1, 0.5);
+  }
+
+  /**
+   * The score carried on into the next level, below the table and outside it: it has no record to beat,
+   * because records are per level. Only shown once it differs from this level's own score, which happens
+   * the moment a Next carries something in, so a plain single-level run is unchanged.
+   */
+  addRunTotal(y) {
+    if (this.result.runTotal === this.result.score) return;
+    const style = { ...FONT, fontSize: '13px', color: PREVIOUS_COLOR };
+    this.add.text(LABEL_X, y, 'Run total', style).setOrigin(0, 0.5).setAlpha(0.85);
+    this.add.text(RUN_X, y, String(this.result.runTotal), style).setOrigin(1, 0.5).setAlpha(0.85);
+  }
+
+  /** The grade that was standing before this run, under the big one, in its own colour. */
+  addPreviousGrade(y, previous, hadPrevious) {
+    if (!hadPrevious) return;
+    const stored = GRADES.find((grade) => grade.name === previous.grade);
+    const text = `previous best  ${previous.grade ?? NO_VALUE}`;
+    this.add.text(GAME_WIDTH / 2, y, text, { ...FONT, fontSize: '14px', color: stored?.color ?? PREVIOUS_COLOR }).setOrigin(0.5);
+  }
+
+  /** NEW BEST, flashing, whenever one of the three records fell. A first completion says so instead. */
+  addRecordBanner(y, records, hadPrevious) {
     const centreX = GAME_WIDTH / 2;
-    this.add.text(centreX - 150, y, label, { ...FONT, fontSize: '22px', color: '#d8f3dc' }).setOrigin(0, 0.5);
-    return this.add.text(centreX + 150, y, value, { ...FONT, fontSize: '22px' }).setOrigin(1, 0.5);
+    if (!hadPrevious) {
+      this.add.text(centreX, y, 'FIRST HARVEST RECORDED', { ...FONT, fontSize: '14px', color: '#d8f3dc' }).setOrigin(0.5).setAlpha(0.8);
+      return;
+    }
+    if (!records.score && !records.timeMs && !records.drops) return;
+
+    const banner = this.add
+      .text(centreX, y, 'NEW BEST', { ...FONT, fontSize: '26px', color: RECORD_COLOR, strokeThickness: 5 })
+      .setOrigin(0.5);
+    this.tweens.add({ targets: banner, alpha: 0.15, duration: 240, yoyo: true, repeat: 7 });
   }
 
   addButton(x, y, label, onClick) {

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { PARALLAX, TEXTURES, TILESETS, TILE_SIZE, UI } from '../config/constants.js';
+import { LEVELS, PARALLAX, TEXTURES, TILESETS, TILE_SIZE, UI } from '../config/constants.js';
+import { learnLevelMax, objectsFromMapJson } from '../state/levelScore.js';
 import { ANIMATIONS, SHEET_PATH, createAnimations } from '../config/animations.js';
 import Sfx from '../audio/Sfx.js';
 
@@ -17,6 +18,9 @@ import Sfx from '../audio/Sfx.js';
  * Audio works the same way: every sound is requested in each shipped format, and one whose file did not
  * load is silent (see Sfx).
  */
+/** Cache key for a level's raw map JSON. Kept clear of the tilemap cache, which GameScene fills. */
+const levelDataKey = (key) => `level-data:${key}`;
+
 export default class BootScene extends Phaser.Scene {
   constructor() {
     super('BootScene');
@@ -56,6 +60,14 @@ export default class BootScene extends Phaser.Scene {
     for (const { key, urls } of Sfx.files()) {
       this.load.audio(key, urls);
     }
+
+    // Every level's map, as plain JSON. Grades are a percentage of a level's maximum score, and the
+    // title screen grades a stored best before any level has been played, so the maximums have to be
+    // known this early. GameScene loads the same file again as a tilemap; the browser serves that from
+    // its own cache, and the two caches are separate so the keys cannot collide.
+    for (const level of Object.values(LEVELS)) {
+      this.load.json(levelDataKey(level.key), level.file);
+    }
   }
 
   create() {
@@ -68,8 +80,17 @@ export default class BootScene extends Phaser.Scene {
     createAnimations(this);
     this.reportArt();
     this.reportAudio();
+    this.learnLevelMaxes();
 
     this.scene.start('TitleScene');
+  }
+
+  /** Works out what each level is worth, so any screen can grade a score against its own level. */
+  learnLevelMaxes() {
+    for (const level of Object.values(LEVELS)) {
+      const json = this.cache.json.get(levelDataKey(level.key));
+      learnLevelMax(level.key, objectsFromMapJson(json)); // warns for itself if there is nothing to count
+    }
   }
 
   makePlaceholders() {

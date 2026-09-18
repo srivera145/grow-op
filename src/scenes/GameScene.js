@@ -9,6 +9,8 @@ import { ensureRotateGuard } from './RotateScene.js';
 import { touchControlsWanted } from '../input/TouchSource.js';
 import { ATTACK, CAMERA, ENEMIES, FIRST_LEVEL, LEVELS, PICKUPS, PLAYER, RULES, TILESETS, TILE_SIZE } from '../config/constants.js';
 import Sfx from '../audio/Sfx.js';
+import Save from '../state/Save.js';
+import { learnLevelMax } from '../state/levelScore.js';
 
 // Enemy classes by the object name used in the Tiled "objects" layer.
 const ENEMY_TYPES = {
@@ -56,7 +58,12 @@ export default class GameScene extends Phaser.Scene {
     if (data.reset !== false) {
       this.registry.set({ score: 0, drops: 0, lives: RULES.START_LIVES });
     }
-    this.registry.set({ world: this.level.name, worldLabel: this.level.label, time: 0 });
+    // levelScore is what this level alone is worth. The run total carries across levels, so it is the
+    // wrong figure to grade, to record, or to measure a new best against; every level starts this at zero,
+    // Replay included. It lives in the registry rather than on the scene because the HUD watches it.
+    // levelKey lets the HUD look this level's stored best up; the rest is what the HUD displays.
+    this.registry.set({ world: this.level.name, worldLabel: this.level.label, levelKey: this.level.key, levelScore: 0, time: 0 });
+    Save.recordPlay(); // one play per level attempt, so a replay and a Next each count
   }
 
   preload() {
@@ -80,7 +87,13 @@ export default class GameScene extends Phaser.Scene {
     const { widthInPixels, heightInPixels } = this.map;
     this.physics.world.setBounds(0, 0, widthInPixels, heightInPixels, true, true, true, false);
 
-    this.spawnObjects(this.map.getObjectLayer('objects'));
+    // Worked out from the map actually loaded, which is the authority; the boot-time pass only exists so
+    // the title screen can grade a stored best. In the registry so the HUD can show progress towards it.
+    const objectLayer = this.map.getObjectLayer('objects');
+    this.maxScore = learnLevelMax(this.level.key, objectLayer?.objects);
+    this.registry.set('levelMaxScore', this.maxScore);
+
+    this.spawnObjects(objectLayer);
 
     this.physics.add.collider(this.player, this.groundLayer);
     this.physics.add.collider(this.enemies, this.groundLayer, undefined, (enemy) => enemy.collidesWithGround);
@@ -196,16 +209,16 @@ export default class GameScene extends Phaser.Scene {
 
     switch (pickup.kind) {
       case 'water-drop':
-        this.registry.inc('score', PICKUPS.WATER_DROP_SCORE);
+        this.addScore(PICKUPS.WATER_DROP_SCORE);
         this.addDrop();
         break;
       case 'light-orb':
-        this.registry.inc('score', PICKUPS.LIGHT_ORB_SCORE);
+        this.addScore(PICKUPS.LIGHT_ORB_SCORE);
         player.grow();
         this.announce('GROWTH SPURT!');
         break;
       case 'nutrient':
-        this.registry.inc('score', PICKUPS.NUTRIENT_SCORE);
+        this.addScore(PICKUPS.NUTRIENT_SCORE);
         player.makeInvincible();
         this.announce('NUTRIENT BOOST!');
         break;
@@ -216,6 +229,12 @@ export default class GameScene extends Phaser.Scene {
         return;
     }
     pickup.collect();
+  }
+
+  /** Every point scored. The run total carries on across levels; levelScore counts this level alone. */
+  addScore(points) {
+    this.registry.inc('score', points);
+    this.registry.inc('levelScore', points);
   }
 
   addDrop() {
@@ -234,10 +253,11 @@ export default class GameScene extends Phaser.Scene {
   onEnemyContact(player, enemy) {
     if (this.state !== 'playing' || !enemy.canTouch()) return;
 
-    // Nutrient invincibility beats every enemy, including the ones that cannot be stomped.
+    // Nutrient invincibility beats every enemy, including the ones that cannot be stomped. The enemy
+    // decides what dying looks like, so one that splits still splits; the player just does not bounce.
     if (player.isInvincible()) {
-      enemy.defeat('knockout');
-      this.registry.inc('score', ENEMIES.STOMP_SCORE);
+      enemy.knockout();
+      this.addScore(ENEMIES.STOMP_SCORE);
       return;
     }
 
@@ -245,7 +265,7 @@ export default class GameScene extends Phaser.Scene {
       Sfx.play('stomp');
       enemy.stomp(player);
       player.bounce();
-      this.registry.inc('score', ENEMIES.STOMP_SCORE);
+      this.addScore(ENEMIES.STOMP_SCORE);
       return;
     }
 
@@ -257,7 +277,7 @@ export default class GameScene extends Phaser.Scene {
     if (this.state !== 'playing' || !enemy.slashable || !enemy.canTouch()) return;
     Sfx.play('slash-hit');
     enemy.defeat('knockout');
-    this.registry.inc('score', ATTACK.SCORE);
+    this.addScore(ATTACK.SCORE);
   }
 
   /**
@@ -344,7 +364,7 @@ export default class GameScene extends Phaser.Scene {
     player.body.enable = false; // physics off so the tween owns the sprite
     player.attackZone.body.enable = false;
     player.celebrate();
-    this.registry.inc('score', PICKUPS.GOAL_SCORE);
+    this.addScore(PICKUPS.GOAL_SCORE);
     this.announce('STAGE CLEAR!', 2000);
     Sfx.play('level-complete');
 
@@ -364,7 +384,8 @@ export default class GameScene extends Phaser.Scene {
           this.scene.stop('HUDScene');
           this.scene.start('LevelCompleteScene', {
             level: this.level.key,
-            score: this.registry.get('score'),
+            score: this.registry.get('levelScore'), // what this level earned, which is what gets recorded
+            runTotal: this.registry.get('score'), // the figure the HUD was showing, carried into the next level
             drops: this.levelDrops,
             timeMs,
           });

@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { GAME_HEIGHT, GAME_WIDTH, TOUCH, UI } from '../config/constants.js';
 import { touchControlsWanted } from '../input/TouchSource.js';
 import { addMuteButton } from '../audio/muteButton.js';
+import Save from '../state/Save.js';
+import { percentOf } from '../state/levelScore.js';
 
 const TEXT_STYLE = {
   fontFamily: 'monospace',
@@ -13,6 +15,7 @@ const TEXT_STYLE = {
 
 // Where each readout sits. x is the left edge of its icon (or of its text when there are no icons).
 const RIGHT_COLUMN = GAME_WIDTH - 150;
+const NEW_BEST_COLOR = '#ffd60a';
 const LAYOUT = {
   world: { x: 16, y: 10, frame: UI.HUD_ICONS.FRAME.WORLD, label: 'World' },
   drops: { x: 16, y: 46, frame: UI.HUD_ICONS.FRAME.DROPS, label: 'Drops' },
@@ -55,6 +58,25 @@ export default class HUDScene extends Phaser.Scene {
     this.helpText = this.add.text(0, 0, '', { ...TEXT_STYLE, fontSize: '12px', strokeThickness: 3 }).setScrollFactor(0).setAlpha(0.6);
     this.showHelp(touchControlsWanted());
     this.game.events.on('touch:controls', this.showTouchHelp, this);
+
+    // "NEW BEST" flashes beside the score the moment this run passes the stored best for this level.
+    // Nothing to beat until the level has been finished once, and then only one flash per run.
+    const best = Save.getLevelBest(this.registry.get('levelKey'));
+    this.bestScore = best.completions > 0 ? best.score : null;
+    this.newBestFlashed = false;
+    this.newBestText = this.add
+      .text(RIGHT_COLUMN - 8, 26, 'NEW BEST', { ...TEXT_STYLE, fontSize: '14px', color: NEW_BEST_COLOR, strokeThickness: 3 })
+      .setOrigin(1, 0.5)
+      .setScrollFactor(0)
+      .setAlpha(0);
+
+    // How much of this level has been harvested so far. Grades are a percentage of the level's maximum,
+    // so this is the number the grade is about to be read off. Hidden when that maximum is unknown.
+    this.harvestText = this.add
+      .text(16, 86, '', { ...TEXT_STYLE, fontSize: '14px', strokeThickness: 3 })
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setAlpha(0.7);
 
     this.refresh();
 
@@ -110,6 +132,27 @@ export default class HUDScene extends Phaser.Scene {
     show(this.timeText, `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`);
     show(this.scoreText, String(get('score', 0)).padStart(6, '0'));
     show(this.livesText, `x${get('lives', 0)}`);
+    // The readout above shows the run total; the flash compares what THIS level has earned, because
+    // that is what the stored best holds. A score carried in from an earlier level must not trip it.
+    this.flashNewBest(get('levelScore', 0));
+
+    const maxScore = get('levelMaxScore', 0);
+    this.harvestText.setText(maxScore > 0 ? `Harvest ${percentOf(get('levelScore', 0), maxScore)}%` : '');
+  }
+
+  /** Fires once per level run, the first time this level's own earnings pass its stored best. */
+  flashNewBest(score) {
+    if (this.newBestFlashed || this.bestScore === null || score <= this.bestScore) return;
+    this.newBestFlashed = true;
+    this.newBestText.setAlpha(1);
+    this.tweens.add({
+      targets: this.newBestText,
+      alpha: 0.1,
+      duration: 200,
+      yoyo: true,
+      repeat: 5,
+      onComplete: () => this.newBestText.setAlpha(0),
+    });
   }
 
   showMessage(text, holdMs = 1400) {

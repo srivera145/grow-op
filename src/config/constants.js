@@ -176,15 +176,19 @@ export const ENEMIES = {
   // split). Walkers still turn sooner at a wall or a ledge, whichever comes first.
   SPIDER_MITE: { SPEED: 60, RANGE: 120, BODY: { width: 34, height: 26 } },
   FUNGUS_GNAT: { SPEED: 70, AMPLITUDE: 40, PERIOD_MS: 1600, RANGE: 96, BODY: { width: 28, height: 24 } }, // sine flight, patrolling RANGE px either side of its spawn point
-  ROOT_ROT: { SPEED: 28, SMALL_SPEED: 55, RANGE: 96, SMALL_RANGE: 64, SPLIT_HOP_VELOCITY: -220, SPLIT_OFFSET: 10, BODY: { width: 36, height: 28 }, SMALL_BODY: { width: 22, height: 18 } },
+  ROOT_ROT: { SPEED: 28, SMALL_SPEED: 55, RANGE: 96, SMALL_RANGE: 64, SPLIT_HOP_VELOCITY: -220, SPLIT_OFFSET: 10, SPLIT_DIRECTIONS: [-1, 1], BODY: { width: 36, height: 28 }, SMALL_BODY: { width: 22, height: 18 } },
 };
 
-// Harvest grades, best first. A score earns the first grade whose minimum it reaches.
+// Harvest grades, best first. A run earns the first grade whose bar it clears.
+// minPercent is the rule: a percentage of the level's OWN maximum obtainable score (see
+// src/state/levelScore.js), so a grade means the same thing everywhere and a new level needs no tuning.
+// minScore is the fallback, used only when that maximum cannot be worked out - an unreadable or empty
+// object layer - because grading on a percentage of nothing is not possible.
 export const GRADES = [
-  { minScore: 4000, name: 'Exotic', color: '#c77dff' },
-  { minScore: 2500, name: 'Top Shelf', color: '#ffd60a' },
-  { minScore: 1000, name: 'Mids', color: '#4cd137' },
-  { minScore: 0, name: 'Shake', color: '#b08968' },
+  { name: 'Exotic', minPercent: 90, minScore: 4000, color: '#c77dff' },
+  { name: 'Top Shelf', minPercent: 70, minScore: 2500, color: '#ffd60a' },
+  { name: 'Mids', minPercent: 40, minScore: 1000, color: '#4cd137' },
+  { name: 'Shake', minPercent: 0, minScore: 0, color: '#b08968' },
 ];
 
 // Parallax layers, back to front. factor is how far the layer moves relative to the camera.
@@ -200,4 +204,14 @@ export const RULES = {
   RESPAWN_DELAY_MS: 1200,
   GAME_OVER_DELAY_MS: 2500,
   JARRING_HOLD_MS: 500, // pause on the sealed jar before the grade screen opens
+};
+
+// Saved results. One namespaced localStorage key holds one JSON object; src/state/Save.js is the only
+// code that touches it. Raise VERSION whenever the shape of that object changes: a save written by any
+// other version is discarded, which is always safe because only finished results are ever stored.
+export const SAVE = {
+  STORAGE_KEY: 'growop.save',
+  // 2: a level's stored score is what that level earned. Version 1 recorded the run total, which carried
+  // over from earlier levels, so those saves hold inflated scores under this meaning and are discarded.
+  VERSION: 2,
 };

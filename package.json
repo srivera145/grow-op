@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "autotile": "node tools/autotile.mjs",
+    "check-levels": "node tools/check-level-score.mjs",
     "audio": "node tools/make-audio.mjs"
   },
   "dependencies": {
