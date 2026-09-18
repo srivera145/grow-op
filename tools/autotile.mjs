@@ -21,6 +21,7 @@ import { pathToFileURL } from 'node:url';
 import { autotile, serialize } from './autotile-core.mjs';
 
 const LEVEL_DIR = 'public/levels';
+const INDEX_FILE = 'index.json'; // the level list, not a map: see src/config/levels.js
 const LAYER_NAME = 'ground';
 const TILESET_NAME = 'tiles-soil';
 
@@ -28,6 +29,7 @@ function processFile(file, checkOnly) {
   const original = fs.readFileSync(file, 'utf8');
   const map = JSON.parse(original);
 
+  if (!Array.isArray(map.layers)) throw new Error(`${file}: not a Tiled map (no layers)`);
   const layer = map.layers.find((l) => l.type === 'tilelayer' && l.name === LAYER_NAME);
   if (!layer) throw new Error(`${file}: no tile layer named "${LAYER_NAME}"`);
   const tileset = map.tilesets.find((t) => t.name === TILESET_NAME);
@@ -58,7 +60,13 @@ function main() {
   const args = process.argv.slice(2);
   const checkOnly = args.includes('--check');
   const named = args.filter((a) => !a.startsWith('--'));
-  const files = named.length ? named : fs.readdirSync(LEVEL_DIR).filter((f) => f.endsWith('.json')).sort().map((f) => path.join(LEVEL_DIR, f));
+  const files = named.length
+    ? named
+    : fs
+        .readdirSync(LEVEL_DIR)
+        .filter((f) => f.endsWith('.json') && f !== INDEX_FILE)
+        .sort()
+        .map((f) => path.join(LEVEL_DIR, f));
 
   let outOfDate = 0;
   for (const file of files) {

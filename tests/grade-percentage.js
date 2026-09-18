@@ -7,6 +7,7 @@ import {
   freshGame,
   is,
   launch,
+  liveImport,
   replayLevel,
   report,
   saved,
@@ -27,10 +28,11 @@ const noise = watchConsole(page);
 await freshGame(page);
 
 // ---- the computed max, known before any level is played ----
-const boot = await page.evaluate(async () => {
-  const mod = await import('/src/state/levelScore.js');
-  return { max: mod.maxScoreForLevel('world1-1'), gradeAt2619: mod.gradeFor(2619, 2910).name, gradeAt2618: mod.gradeFor(2618, 2910).name };
-});
+const boot = await liveImport(page, '/src/state/levelScore.js', (mod) => ({
+  max: mod.maxScoreForLevel('world1-1'),
+  gradeAt2619: mod.gradeFor(2619, 2910).name,
+  gradeAt2618: mod.gradeFor(2618, 2910).name,
+}));
 console.log(`computed max for world1-1: ${boot.max}`);
 is(results, 'max is known at the title screen, before any level loads', boot.max, 2910);
 check(results, 'the 90% Exotic boundary is exact', boot.gradeAt2619 === 'Exotic' && boot.gradeAt2618 === 'Top Shelf', JSON.stringify(boot));

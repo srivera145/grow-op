@@ -85,7 +85,7 @@
         {"id":45,"name":"root-rot","type":"","rotation":0,"visible":true,"x":3040,"y":448,"width":32,"height":32},
         {"id":46,"name":"fungus-gnat","type":"","rotation":0,"visible":true,"x":1764,"y":324,"width":24,"height":24},
         {"id":47,"name":"fungus-gnat","type":"","rotation":0,"visible":true,"x":2372,"y":356,"width":24,"height":24},
-        {"id":48,"name":"fungus-gnat","type":"","rotation":0,"visible":true,"x":2964,"y":324,"width":24,"height":24}
+        {"id":48,"name":"fungus-gnat","type":"","rotation":0,"visible":true,"x":2964,"y":260,"width":24,"height":24}
       ],
       "opacity": 1,
       "type": "objectgroup",

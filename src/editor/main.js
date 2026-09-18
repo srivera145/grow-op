@@ -5,6 +5,7 @@ import { ObjectLayer } from './Objects.js';
 import { Palette } from './Palette.js';
 import { OBJECT_TYPES, TILE, blankLevel, centreOf, parseLevel, serializeLevel } from './format.js';
 import { summarise, validate } from './validate.js';
+import { INDEX_URL, defaultLabel } from '../config/levels.js';
 
 /**
  * The level editor. Plain canvas 2D, no Phaser.
@@ -37,6 +38,7 @@ let tool = 'tiles';
 let objectType = 'water-drop';
 let problems = [];
 let gids = null; // autotiled gids, rebuilt whenever the grid changes
+let levelIndex = []; // public/levels/index.json, as loaded; the Level order panel edits this copy
 
 const art = { tiles: null, parallax: [], sheets: new Map() };
 
@@ -470,6 +472,31 @@ const palette = new Palette(document.getElementById('palette'), {
     tool = 'objects';
     changed();
   },
+  onReorder: (from, to) => {
+    if (to < 0 || to >= levelIndex.length) return;
+    const working = palette.readIndex(); // keep whatever has been typed into the rows
+    const [moved] = working.splice(from, 1);
+    working.splice(to, 0, moved);
+    levelIndex = working;
+    palette.renderIndex(levelIndex);
+    say('Level order changed. Save level order to write it.', 'warn');
+  },
+  onSaveIndex: async (index) => {
+    try {
+      const response = await fetch('/api/level-index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      levelIndex = index;
+      palette.renderIndex(levelIndex);
+      say(`Wrote the list of ${body.levels} level(s).`);
+    } catch (error) {
+      say(`Could not write the level list (${error.message}).`, 'error');
+    }
+  },
   onResize: (width, height) => {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width < 8 || height < 8) {
       say('Width and height have to be at least 8 tiles.', 'error');
@@ -509,6 +536,21 @@ function adopt(loaded) {
   changed();
 }
 
+/** The level list, for the Level order panel and for knowing whether a save needs to register. */
+async function loadIndex() {
+  try {
+    const response = await fetch(INDEX_URL, { cache: 'no-store' });
+    if (!response.ok) throw new Error(String(response.status));
+    const parsed = await response.json();
+    levelIndex = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    levelIndex = []; // a missing index is not fatal here: saving a level will start one
+  }
+  palette.renderIndex(levelIndex);
+}
+
+const indexEntry = (key) => levelIndex.find((entry) => entry.key === key) ?? null;
+
 async function loadLevel(name) {
   if (!NAME_PATTERN.test(name)) {
     say('A level name may only use a-z, 0-9 and dashes.', 'error');
@@ -518,11 +560,23 @@ async function loadLevel(name) {
     const response = await fetch(`/levels/${name}.json`, { cache: 'no-store' });
     if (!response.ok) throw new Error(String(response.status));
     adopt(parseLevel(await response.text()));
+    applyMeta(name);
     say(`Loaded ${name}.json`);
   } catch {
     adopt(blankLevel(120, 17));
+    applyMeta(name);
     say(`No ${name}.json yet - started an empty 120x17 map.`, 'warn');
   }
+}
+
+/** Shows this level's index entry, or the defaults a new level would be registered with. */
+function applyMeta(key) {
+  const entry = indexEntry(key);
+  palette.setMeta({
+    name: entry?.name ?? key,
+    label: entry?.label ?? defaultLabel(key),
+    tileset: entry?.tileset ?? 'tiles-soil',
+  });
 }
 
 /** The level exactly as it would be written to disk. */
@@ -542,11 +596,14 @@ document.getElementById('save').addEventListener('click', async () => {
     const response = await fetch('/api/level', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, json: currentText() }),
+      // `entry` is only used if this key is not in the index yet: saving a level registers a new one
+      // and never rewrites an existing entry. Level order is the panel for changing those.
+      body: JSON.stringify({ name, json: currentText(), entry: palette.meta() }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
-    say(`Saved public/levels/${name}.json`);
+    if (body.registered) await loadIndex();
+    say(`Saved public/levels/${name}.json${body.registered ? ' and registered it' : ''}`);
   } catch (error) {
     say(`Could not save (${error.message}). Use Download instead.`, 'error');
   }
@@ -614,6 +671,10 @@ if (import.meta.env.DEV) {
       changed();
     },
     reset: () => adopt(blankLevel(grid.width, grid.height)),
+    index: () => levelIndex,
+    setMeta: (meta) => palette.setMeta(meta),
+    saveIndex: (index) => palette.handlers.onSaveIndex(index ?? palette.readIndex()),
+    reorder: (from, to) => palette.handlers.onReorder(from, to),
     text: () => currentText(),
   };
 }
@@ -624,6 +685,7 @@ window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 await loadArt();
+await loadIndex(); // before the level, so its name, label and tileset can be shown
 const wanted = new URLSearchParams(window.location.search).get('level');
 if (wanted) nameInput.value = wanted;
 await loadLevel(nameInput.value.trim());

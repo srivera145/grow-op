@@ -6,6 +6,7 @@ import {
   emptyObjectLayer,
   is,
   launch,
+  liveImport,
   openGame,
   report,
   sleep,
@@ -38,10 +39,10 @@ check(results, 'the title shows the recomputed grade, not the stored one',
 check(results, 'the stored grade on disk is untouched',
   JSON.parse(await page.evaluate(() => localStorage.getItem('growop.save'))).levels['world1-1'].grade === 'Top Shelf');
 
-const api = await page.evaluate(async () => {
-  const save = (await import('/src/state/Save.js')).default;
-  return { best: save.best(), level: save.getLevelBest('world1-1') };
-});
+const api = await liveImport(page, '/src/state/Save.js', (mod) => ({
+  best: mod.default.best(),
+  level: mod.default.getLevelBest('world1-1'),
+}));
 check(results, 'Save recomputes on read for every caller',
   api.best.grade === 'Exotic' && api.level.grade === 'Exotic', JSON.stringify(api));
 
@@ -78,15 +79,12 @@ const warnings = emptyNoise.filter((line) => line.includes('levelScore'));
 check(results, 'an empty object layer warns, once', warnings.length === 1, JSON.stringify(emptyNoise));
 check(results, 'and nothing else was logged', emptyNoise.length === warnings.length, JSON.stringify(emptyNoise));
 
-const fallback = await empty.evaluate(async () => {
-  const mod = await import('/src/state/levelScore.js');
-  return {
-    max: mod.maxScoreForLevel('world1-1'),
-    at2700: mod.gradeFor(2700, 0).name,
-    at4000: mod.gradeFor(4000, 0).name,
-    at900: mod.gradeFor(900, 0).name,
-  };
-});
+const fallback = await liveImport(empty, '/src/state/levelScore.js', (mod) => ({
+  max: mod.maxScoreForLevel('world1-1'),
+  at2700: mod.gradeFor(2700, 0).name,
+  at4000: mod.gradeFor(4000, 0).name,
+  at900: mod.gradeFor(900, 0).name,
+}));
 is(results, 'the max is zero, not a crash', fallback.max, 0);
 check(results, 'grading falls back to the absolute thresholds',
   fallback.at2700 === 'Top Shelf' && fallback.at4000 === 'Exotic' && fallback.at900 === 'Shake', JSON.stringify(fallback));

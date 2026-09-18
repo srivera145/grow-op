@@ -17,11 +17,22 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LEVELS } from '../src/config/constants.js';
+import { buildLevels } from '../src/config/levels.js';
 import { describeObjects, maxScoreForObjects, objectsFromMapJson } from '../src/state/levelScore.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SHUFFLES = 50;
+
+// The index is read straight off disk and put through the same buildLevels() the game uses. Importing
+// LEVELS would give an empty table here, because the browser fills it by fetching that same file.
+const INDEX = join(root, 'public/levels/index.json');
+let LEVELS;
+try {
+  LEVELS = buildLevels(JSON.parse(readFileSync(INDEX, 'utf8')));
+} catch (error) {
+  console.error(`Could not read public/levels/index.json: ${error.message}`);
+  process.exit(1);
+}
 
 /** Fisher-Yates, on a copy. */
 function shuffled(items) {

@@ -6,7 +6,8 @@ import HUDScene from './scenes/HUDScene.js';
 import LevelCompleteScene from './scenes/LevelCompleteScene.js';
 import TouchScene from './scenes/TouchScene.js';
 import RotateScene from './scenes/RotateScene.js';
-import { GAME_WIDTH, GAME_HEIGHT, GRAVITY_Y, LEVELS } from './config/constants.js';
+import { GAME_WIDTH, GAME_HEIGHT, GRAVITY_Y } from './config/constants.js';
+import { LEVELS, loadLevels } from './config/levels.js';
 
 const config = {
   type: Phaser.AUTO,
@@ -35,6 +36,21 @@ const config = {
   // TouchScene and RotateScene are registered for every device but only ever started on touch devices.
   scene: [BootScene, TitleScene, GameScene, HUDScene, LevelCompleteScene, TouchScene, RotateScene],
 };
+
+/**
+ * The level list is data, so it has to be in hand before anything asks for a level: BootScene preloads
+ * every entry the moment the game is created. A game with no levels in it is not worth starting, so a
+ * failure here says so on the page instead of leaving a black canvas and a console message.
+ */
+try {
+  await loadLevels();
+} catch (error) {
+  document.getElementById('game').innerHTML =
+    `<div style="font:14px/1.6 ui-monospace,monospace;color:#e8443a;padding:24px">
+       <strong>Grow Op could not start.</strong><br />${error.message}
+     </div>`;
+  throw error;
+}
 
 const game = new Phaser.Game(config);
 

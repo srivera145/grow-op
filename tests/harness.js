@@ -289,6 +289,30 @@ export function readTexts(sceneKey) {
   return out;
 }
 
+/**
+ * Imports one of the game's modules INSIDE the page and hands back whatever the callback pulls out of it.
+ *
+ * It resolves the URL the page actually loaded rather than importing the bare path, because Vite hangs a
+ * `?t=<timestamp>` on a module after it is edited: a bare import then resolves to a different URL, which
+ * is a second, freshly-initialised copy of the module. Anything that module remembered - a memo, a
+ * singleton, a table filled in at startup - is empty in that copy, so the test reads zero and believes it.
+ */
+export function liveImport(page, path, pick) {
+  return page.evaluate(
+    async (modulePath, source) => {
+      const loaded = performance
+        .getEntriesByType('resource')
+        .map((resource) => resource.name)
+        .find((name) => new URL(name).pathname.endsWith(modulePath));
+      const module = await import(loaded ?? modulePath);
+      // eslint-disable-next-line no-new-func
+      return new Function('module', `return (${source})(module);`)(module);
+    },
+    path,
+    pick.toString(),
+  );
+}
+
 export const texts = (page, key) => page.evaluate(readTexts, key);
 export const labels = async (page, key) => (await texts(page, key)).map((object) => object.text);
 export const saved = (page) => page.evaluate(() => localStorage.getItem('growop.save'));
@@ -432,32 +456,39 @@ export const survey = (page) => page.evaluate(() => {
 
 // ---------------------------------------------------------------- level fixtures
 
-const ONE_LEVEL = `export const LEVELS = {
-  'world1-1': { key: 'world1-1', name: 'World 1-1', label: '1-1', file: 'levels/world1-1.json', tileset: 'tiles-soil', next: 'world1-1' },
-};`;
-
-const TWO_LEVELS = `export const LEVELS = {
-  'world1-1': { key: 'world1-1', name: 'World 1-1', label: '1-1', file: 'levels/world1-1.json', tileset: 'tiles-soil', next: 'world1-2' },
-  'world1-2': { key: 'world1-2', name: 'World 1-2', label: '1-2', file: 'levels/world1-1.json', tileset: 'tiles-soil', next: 'world1-1' },
-};`;
-
 /**
- * Registers world1-1 a second time as 1-2 for one page load, so behaviour that only shows up when a run
- * spans levels can be tested while the game still ships one. Serves a patched constants.js from the dev
- * server's own response; nothing on disk changes, so there is nothing to put back afterwards.
- * Returns a function giving the number of times the patch was served.
+ * Registers world1-1's map a second time as world1-2 for one page load, so behaviour that only shows up
+ * when a run spans levels can be tested while the game still ships one.
+ *
+ * The level list is data now, so this patches the index the game fetches and serves world1-1's map under
+ * the second key as well - a level's file is derived from its key, so the same map cannot simply be
+ * pointed at twice. Nothing on disk changes, so there is nothing to put back afterwards. Returns a
+ * function giving the number of times the index was patched.
  */
 export async function addSecondLevel(page) {
   let patched = 0;
   await page.setRequestInterception(true);
   page.on('request', async (request) => {
-    if (!new URL(request.url()).pathname.endsWith('/src/config/constants.js')) return request.continue();
-    const body = await (await fetch(request.url())).text();
-    if (!body.includes(ONE_LEVEL)) {
-      return request.respond({ status: 500, contentType: 'text/plain', body: 'the LEVELS block in constants.js moved' });
+    const path = new URL(request.url()).pathname;
+
+    if (path.endsWith('/levels/index.json')) {
+      const index = await (await fetch(request.url())).json();
+      if (!Array.isArray(index) || index[0]?.key !== 'world1-1') {
+        return request.respond({ status: 500, contentType: 'text/plain', body: 'the level index is not the shape this fixture expects' });
+      }
+      patched += 1;
+      const both = [...index, { key: 'world1-2', name: 'World 1-2', label: '1-2', tileset: 'tiles-soil' }];
+      return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(both) });
     }
-    patched += 1;
-    request.respond({ status: 200, contentType: 'application/javascript', body: body.replace(ONE_LEVEL, TWO_LEVELS) });
+
+    // The second level is the first level's map under another name, including the HEAD the startup
+    // check makes before the game is created.
+    if (path.endsWith('/levels/world1-2.json')) {
+      const map = await (await fetch(request.url().replace('world1-2', 'world1-1'))).text();
+      return request.respond({ status: 200, contentType: 'application/json', body: request.method() === 'HEAD' ? '' : map });
+    }
+
+    return request.continue();
   });
   return () => patched;
 }

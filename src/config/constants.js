@@ -86,13 +86,11 @@ export const TOUCH = {
   ROTATE: { title: 'Rotate your device', subtitle: 'Grow Op plays in landscape', backdropAlpha: 0.94 },
 };
 
-// Levels are Tiled JSON maps served from public/levels. `tileset` names an entry in TILESETS and the
-// tileset block inside the map. `label` is the short form shown beside the HUD's world icon. `next` is
-// the level the grade screen's Next button opens; with one level it loops back to itself.
-export const LEVELS = {
-  'world1-1': { key: 'world1-1', name: 'World 1-1', label: '1-1', file: 'levels/world1-1.json', tileset: 'tiles-soil', next: 'world1-1' },
-};
-export const FIRST_LEVEL = 'world1-1';
+// Levels are Tiled JSON maps served from public/levels, listed in public/levels/index.json rather than
+// here, so adding one is data and not a source edit (the level editor registers its own). Re-exported so
+// every `import { LEVELS } from './config/constants.js'` keeps working; see config/levels.js for the
+// shape and for loadLevels(), which fills them in before the game is created.
+export { LEVELS, FIRST_LEVEL } from './levels.js';
 
 export const PLAYER = {
   // Horizontal movement
