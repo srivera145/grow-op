@@ -38,7 +38,11 @@ export const TILESETS = {
   'tiles-pot': { file: 'assets/tiles/tiles-pot.png', tileCount: 3, columns: 3 },
   'tiles-stone': { file: 'assets/tiles/tiles-stone.png', tileCount: 3, columns: 3 },
   'tiles-tent-floor': { file: 'assets/tiles/tiles-tent-floor.png', tileCount: 3, columns: 3 },
-  'tiles-hydro-grate': { file: 'assets/tiles/tiles-hydro-grate.png', firstGid: 1, tileCount: 9, columns: 3, layout: 'edges3x3' },
+  // Generated art, and it stops short of its cells the way tiles-soil does: columns 32 and 63 and
+  // rows 31, 32 and 64 of the packed sheet are over 84% transparent. These three numbers are not
+  // copied from tiles-soil - they are measured off this sheet by tools/repack.py:
+  //   python3 tools/repack.py --seams public/assets/tiles/tiles-hydro-grate.png 32
+  'tiles-hydro-grate': { file: 'assets/tiles/tiles-hydro-grate.png', firstGid: 1, tileCount: 9, columns: 3, layout: 'edges3x3', backing: { color: 0x000000, inset: 2, seamInset: 1 } },
 };
 
 // Interface images. hud-icons is one row of icons; FRAME names which icon, counted from the left, shows what.

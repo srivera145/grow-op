@@ -32,6 +32,28 @@ const PREVIEW_SCALE = 4; // the sheets are 32px-ish; anything less and the frame
  */
 const REPORT_KEY = 'growop.editor.art-report';
 
+/** Which cell boundaries of a packed tileset are see-through, named by pixel line. */
+function seamPositions(audit) {
+  const at = (axis) => (audit.seams ?? []).filter((seam) => seam.axis === axis).map((seam) => seam.at);
+  const columns = at('column');
+  const rows = at('row');
+  return [columns.length ? `columns ${columns.join(', ')}` : '', rows.length ? `rows ${rows.join(', ')}` : '']
+    .filter(Boolean)
+    .join('; ');
+}
+
+const seamSummary = (audit) => ((audit.seams ?? []).length ? `SEE-THROUGH at ${seamPositions(audit)}` : 'solid to the cell edges');
+
+/** What is wrong, and what accepting will do about it, in one line. */
+function seamMessage(audit) {
+  const { backing } = audit;
+  const count = (audit.seams ?? []).length;
+  const fix = backing
+    ? `Accepting registers it with a backing measured off this sheet - colour #${backing.color.toString(16).padStart(6, '0')}, inset ${backing.inset}, seamInset ${backing.seamInset} - which fills them.`
+    : 'No backing could be derived, because the sheet has no opaque outline to take a colour from.';
+  return `${count} cell boundar${count === 1 ? 'y is' : 'ies are'} see-through (${seamPositions(audit)}), so tiles drawn side by side would show a hairline of the background at every join. ${fix}`;
+}
+
 export class Art {
   /**
    * @param root the container element
@@ -317,9 +339,15 @@ export class Art {
     this.drawPreview(packed);
     this.drawAudit(audit);
 
+    // Seams get their own severity. They are not a refusal - accepting derives a backing that fills
+    // them - but they are not a footnote either: it is the difference between a tileset that draws
+    // as one surface and one with a hairline of background showing at every join.
+    const seams = audit.seams ?? [];
     const problems = [
       ...audit.flags.map((message) => ({ severity: 'error', message })),
-      ...[...audit.notes, ...(packed.report ?? [])].map((message) => ({ severity: 'warn', message })),
+      ...(seams.length ? [{ severity: 'seam', message: seamMessage(audit) }] : []),
+      ...[...audit.notes.filter((note) => !seams.length || !note.startsWith(`${seams.length} cell boundar`)),
+          ...(packed.report ?? [])].map((message) => ({ severity: 'warn', message })),
     ];
     this.render(problems);
 
@@ -330,7 +358,7 @@ export class Art {
     } else {
       this.say('Not accepted: the audit flagged this. Repack it from the raw generation, or ask for it again.', 'error');
     }
-    return { ok, key: packed.key, flags: audit.flags, audit };
+    return { ok, key: packed.key, flags: audit.flags, seams: seams.length, audit };
   }
 
   /** Writes the asset, and registers it if that is something this kind can be. */
@@ -446,6 +474,7 @@ export class Art {
       ['transparent', `${audit.transparentPercent}%`],
       audit.dividesEvenly === null ? null : ['width / frames', audit.dividesEvenly ? `even, ${audit.frameWidth}px each` : 'NOT EVEN'],
       audit.kind === 'tileset' ? ['grid', `${audit.columns} x ${audit.rows}`] : null,
+      audit.kind === 'tileset' ? ['cell joins', seamSummary(audit)] : null,
       audit.kind === 'single' ? ['edge seam', `${audit.seamDifference} of 255`] : ['frames found', `${audit.impliedFrames} of ${audit.expectedFrames} expected`],
       ['cell', `${audit.cell.width} x ${audit.cell.height}`],
       ['content', cells.length > 6 ? `${cells.slice(0, 6).join('  ')} ...` : cells.join('  ')],

@@ -805,7 +805,7 @@ if (UNDER_VITE) {
     // handed in the same shape a route answers with. Flattened, because it crosses into a test runner.
     offerArt: (packed) => {
       const verdict = artPanel.offer(packed);
-      return { ok: verdict.ok, key: verdict.key, flags: verdict.flags, canAccept: !document.getElementById('art-accept').hidden };
+      return { ok: verdict.ok, key: verdict.key, flags: verdict.flags, seams: verdict.seams, canAccept: !document.getElementById('art-accept').hidden };
     },
     artKind: (kind) => {
       document.getElementById('art-kind').value = kind;

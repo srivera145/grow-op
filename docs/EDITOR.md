@@ -211,6 +211,7 @@ Every generation is measured before you can do anything with it. All of it is re
 | frames found | how many separate shapes are in the strip, against how many were asked for |
 | grid | for a tileset, the columns and rows that were found |
 | edge seam | for a background, how far its left and right edges are from matching |
+| cell joins | for a tileset, which cell boundaries of the packed sheet are see-through |
 | cell | the frame box the art is being packed into |
 | content | the bounding box of each frame, so a frame far bigger than its cell is visible |
 
@@ -221,8 +222,64 @@ divide by the frame count; and a frame count that is not the one asked for. A ti
 is also a flag, because the autotiler lays nine pieces by edge and anything else draws the wrong tile
 everywhere.
 
-Everything else is a note, shown but not blocking — a frame bigger than its cell is scaled down to fit,
-which is usually fine, and a background whose edges do not match will show its join when it repeats.
+Everything else is shown but does not block — a frame bigger than its cell is scaled down to fit,
+which is usually fine; a background whose edges do not match will show its join when it repeats; and a
+tileset with see-through cell boundaries gets a backing derived for it on accepting, which is the next
+section.
+
+### Seams, and the backing that hides them
+
+A tileset is packed onto an exact grid, and a tile whose art stops a pixel short of its cell leaves a
+gap. The game draws tiles edge to edge, so that gap is a hairline of the *parallax background* showing
+through the ground at every join — a grid of thin bright lines over the whole floor.
+
+This is not a rare defect. `tiles-soil`, drawn by hand long before any of this existed, has it: rows 31
+and 63 of its packed sheet are over 95% transparent. It has always looked right in game because its
+`TILESETS` entry carries a **`backing`**, which `GameScene.addGroundBacking` paints behind the ground.
+
+So the audit measures it. For every interior cell boundary in the *packed* sheet — both pixel lines,
+separately, because they belong to different tiles — it reports the share of that line which is
+transparent. More than half and it is a seam, named by axis and pixel position:
+
+```
+cell joins    SEE-THROUGH at columns 32, 63; rows 31, 32, 64
+```
+
+**A seam is not a flag and does not block acceptance.** It cannot be, or the audit would be refusing
+`tiles-soil`. It is a finding, shown in its own colour, saying which boundaries are see-through and what
+will be done about it — and **accepting derives the backing and registers it**, rather than writing an
+entry that leaves the first level using it looking broken.
+
+The three numbers are measured off the sheet. None of them is copied from `tiles-soil`, whose pair was
+chosen by eye for one particular set of art and means nothing for anybody else's:
+
+| | |
+| --- | --- |
+| `color` | the mean of the darkest tenth of the opaque pixels on the cell outlines — the tile's own border, so a covered join reads as the tile continuing rather than as a painted line. The single darkest pixel is one stray anti-aliased corner and comes out far too dark. |
+| `inset` | how far to hold the fill back from a side facing open air: the **deepest** any pixel along that side is see-through. The fill must not appear anywhere behind the tile's own silhouette, because one visible pixel of it is a dark halo along the ground. |
+| `seamInset` | how far to hold the thin join strips back from the same side: the depth **most** of that side is see-through. The gap itself runs right out to the corner, so a strip held back as far as `inset` would leave the last few pixels of every join showing. |
+
+That last distinction is the whole reason there are two numbers. The derivation can be checked against
+the one example nobody has to take on trust — it reads 16 and 3 off `tiles-soil`, where a person tuning
+by eye chose 14 and 4.
+
+You can run it over a tileset that already exists, which is how `tiles-hydro-grate` got the backing in
+its entry:
+
+```
+$ python3 tools/repack.py --seams public/assets/tiles/tiles-hydro-grate.png 32
+tiles-hydro-grate.png: 96x96, 3x3 cells of 32px
+  SEAM   column 32 is 85.4% transparent
+  SEAM   column 63 is 85.4% transparent
+  SEAM   row 31 is 84.4% transparent
+  SEAM   row 32 is 85.4% transparent
+  SEAM   row 64 is 87.5% transparent
+  backing: { color: 0x000000, inset: 2, seamInset: 1 }
+```
+
+Of the tilesets in `public/assets/tiles`, `tiles-soil`, `tiles-hydro-grate` and `tiles-pot` have seams;
+`tiles-stone` and `tiles-tent-floor` are solid to their cell edges and need no backing. Only the first
+two are registered with one, because the other three are three-tile sets no level uses.
 
 ### Getting it wrong is free the second time
 
@@ -274,9 +331,12 @@ python3 tools/repack.py <source-art-dir> <output-dir>     # the whole known asse
 python3 tools/repack.py --strip   <src.png> <key> <frames> <fw> <fh> <align> --out <dir> [--json]
 python3 tools/repack.py --tileset <src.png> <key> <tile> --out <dir> [--json]
 python3 tools/repack.py --single  <src.png> <key> <width> <height> --out <dir> [--json]
+python3 tools/repack.py --seams   <packed-tileset.png> <tile> [--json]
 ```
 
-The three single-asset modes are what the Art panel uses, and they exist because an asset nobody has
+`--seams` packs nothing: it reads a tileset that already exists and reports its see-through cell
+boundaries and the backing that would hide them. The other three single-asset modes are what the Art
+panel uses, and they exist because an asset nobody has
 made yet has no line in the manifest by definition. They call the same `build_strip`, `build_tileset`
 and `build_single`, over the same `col_blobs`, `content_box`, `clean_alpha` and `place`, so for the same
 inputs they produce byte-identical output to the manifest run. `align` is `bottom` (feet on the floor),
@@ -300,11 +360,18 @@ box would only show up later as a level that will not build. The Art panel appen
 generated tileset is accepted, so the dropdown grows without anyone editing source. A level's file is
 always `levels/<key>.json`, worked out rather than stored, so a key and its file cannot drift apart.
 
-A level's map file always carries one tileset block, named `tiles-soil`, because that is what Tiled and
-the editor write. That block is the *grid* - nine tiles, three columns, starting at gid 1 - and the
-tileset in the index is which *image* gets painted onto it. `GameScene` looks the block up by what it
-calls itself and hands it the level's texture, which is what lets a level change tileset without its map
-being rewritten.
+A level's map file carries exactly one tileset block. That block is the *grid* — nine tiles, three
+columns, starting at gid 1 — and the tileset in the index is which *image* gets painted onto it. Both
+`GameScene` and `npm run autotile` take that single block and check it **by its shape**, never by its
+name: three columns and nine or more tiles is a block the autotiler can write into, whatever it happens
+to be called. The editor writes `tiles-soil`, and a map exported from Tiled under any other name loads,
+renders and autotiles the same.
+
+That agreement is deliberate and was not always true. `autotile.mjs` used to look the block up by the
+literal name `tiles-soil` and throw otherwise, while `GameScene` took the first block whatever its name
+— so a Tiled-authored map would have rendered perfectly in game and then failed `npm run autotile`. A
+map with **more than one** tileset block is refused by name, by both, because the autotiler writes gids
+from a single `firstgid` across the whole layer and a second block's range would be quietly overwritten.
 
 The order is the order of the game. The first entry is where a new game starts, and each level's Next is
 the one after it, with the last wrapping back to the first. An entry can carry its own `next` to break

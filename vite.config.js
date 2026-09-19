@@ -625,7 +625,7 @@ async function acceptArt(body, log) {
   await copyFile(staged, path);
 
   const written = relative(root, path).replace(/\\/g, '/');
-  const registered = wanted.def.registers ? await register(wanted) : null;
+  const registered = wanted.def.registers ? await register(wanted, audit) : null;
   log(`art accepted  ${written}${registered ? `  + registered in ${registered.where}` : ''}`);
 
   return [200, {
@@ -647,14 +647,28 @@ async function acceptArt(body, log) {
  * a regular expression. So the line goes in above the brace that closes the block, and everything
  * around it is left exactly as somebody wrote it.
  */
-async function register(wanted) {
+async function register(wanted, audit) {
   const source = await readFile(CONSTANTS_FILE, 'utf8');
   const where = 'src/config/constants.js';
 
   if (wanted.kind === 'tileset') {
-    const line = `  '${wanted.key}': { file: '${wanted.def.dir}/${wanted.key}.png', firstGid: 1, tileCount: 9, columns: 3, layout: 'edges3x3' },`;
+    // A tileset whose art stops short of its cells shows a hairline gap at every join. The audit has
+    // already measured which boundaries are see-through and what would hide them, so the entry is
+    // written with that backing rather than without one - the alternative is a level that looks
+    // broken and a person who has to find out why. Nothing is copied from tiles-soil.
+    const backing = audit?.seams?.length && audit.backing
+      ? `, backing: { color: 0x${audit.backing.color.toString(16).padStart(6, '0')}, inset: ${audit.backing.inset}, seamInset: ${audit.backing.seamInset} }`
+      : '';
+    const line = `  '${wanted.key}': { file: '${wanted.def.dir}/${wanted.key}.png', firstGid: 1, tileCount: 9, columns: 3, layout: 'edges3x3'${backing} },`;
     await writeFile(CONSTANTS_FILE, insertBefore(source, 'export const TILESETS = {', '};', line), 'utf8');
-    return { where, what: 'TILESETS', line: line.trim() };
+    return {
+      where,
+      what: 'TILESETS',
+      line: line.trim(),
+      note: backing
+        ? `${audit.seams.length} cell boundaries of this sheet are see-through, so it was registered with a backing measured off the sheet. Without one the ground would show a hairline gap at every join.`
+        : undefined,
+    };
   }
 
   const line = `  { key: '${wanted.key}', factor: ${wanted.factor} },`;

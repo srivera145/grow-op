@@ -159,6 +159,10 @@
       .problems li.warn { color: var(--gold); }
       .problems li.warn::before { content: '? '; }
       .problems li.ok { color: var(--dim); }
+      /* A seam is its own severity: not a refusal, because accepting fixes it, but not a footnote
+         either - it is the difference between one surface and a gap at every join. */
+      .problems li.seam { color: #7ec8e3; }
+      .problems li.seam::before { content: '~ '; }
 
       .help { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; color: var(--dim); }
       .help dt { color: var(--text); white-space: nowrap; }

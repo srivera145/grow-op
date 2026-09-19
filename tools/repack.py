@@ -18,6 +18,10 @@ Three ways in. The first is the original, and is what built everything in public
   python3 repack.py --single <src.png> <key> <width> <height> --out <dir> [--json]
       One still image, resized: a parallax layer, or anything else that is not animated.
 
+  python3 repack.py --seams <packed-tileset.png> <tile> [--json]
+      Packs nothing. Reports which cell boundaries of an existing tileset are see-through, and the
+      TILESETS `backing` that would hide them.
+
 The two single-asset modes exist for the editor's Art panel, which generates a strip for an asset
 that by definition has no line in the lists below. They call the same build_strip and build_tileset
 the manifest run calls, so generated art is packed by exactly the code that packed the hand-made
@@ -389,7 +393,166 @@ def audit_strip(src_path, expected, frame_width, frame_height):
                 frames=frames, flags=flags, notes=notes)
 
 
-def audit_tileset(src_path, tile, entry):
+# ---------------------------------------------------------------- seams, and the backing that hides them
+
+# A cell boundary line in a PACKED tileset more than this transparent is a gap: when the game draws two
+# of these tiles side by side, the level's background shows through the join as a hairline.
+SEAM_CLEAR = 0.5
+
+# Deriving a backing. GameScene.addGroundBacking takes three numbers and this is where they come from:
+#
+#   inset     how far to keep the fill clear of a side facing open air. Taken as the DEEPEST any pixel
+#             along that side is see-through, because the fill must not appear anywhere behind the
+#             tile's own silhouette - one visible pixel of it is a dark halo along the ground.
+#   seamInset how far to keep the thin join strips clear of the same side. Taken as the depth MOST of
+#             that side is see-through, because the gap itself runs right out to the corner and a strip
+#             held back as far as `inset` would leave the last few pixels of every join showing.
+#
+# That difference is the whole reason there are two numbers rather than one. Measured against tiles-soil,
+# whose pair was tuned by eye long before this existed, it derives 16 and 3 where a person chose 14 and 4.
+SEAM_TYPICAL_PERCENT = 75
+
+# The backing colour is the tile's own border, so a covered join reads as the tile continuing rather
+# than as a painted line. Taken as the mean of the darkest tenth of the opaque pixels on the cell
+# outlines: the single darkest pixel is one stray anti-aliased corner and comes out far too dark.
+OUTLINE_DARKEST_PERCENT = 10
+LUMINANCE = np.array([0.2126, 0.7152, 0.0722])
+
+
+def cell_views(box):
+    """One cell seen from each of its four sides, as rows running inward from that side."""
+    return {"top": box, "bottom": box[::-1], "left": box.T, "right": box.T[::-1]}
+
+
+def boundary_seams(clear, tile):
+    """
+    Every interior cell boundary line in a packed sheet that is mostly transparent.
+
+    Both pixel lines either side of a boundary are looked at, and reported separately, because they
+    belong to different tiles: art that stops one pixel short on its right edge is a different defect
+    from art that starts one pixel late on its left, and a person fixing it needs to know which.
+    """
+    rows, cols = clear.shape[0] // tile, clear.shape[1] // tile
+    found = []
+    for k in range(1, cols):
+        for x in (k * tile - 1, k * tile):
+            share = float(clear[:, x].mean())
+            if share > SEAM_CLEAR:
+                found.append({"axis": "column", "at": int(x), "transparentPercent": round(share * 100, 1)})
+    for k in range(1, rows):
+        for y in (k * tile - 1, k * tile):
+            share = float(clear[y, :].mean())
+            if share > SEAM_CLEAR:
+                found.append({"axis": "row", "at": int(y), "transparentPercent": round(share * 100, 1)})
+    return found
+
+
+def clear_depths(view, tile):
+    """
+    For each position along one side of a cell, how far in the last see-through pixel sits.
+
+    Positions whose own line is mostly transparent are dropped: that is the perpendicular boundary's
+    gap, and measuring the art's silhouette through it would report the gap twice. The search stops at
+    half the cell, past which a reading belongs to the opposite side.
+    """
+    keep = view.mean(axis=0) <= SEAM_CLEAR
+    band = view[:tile // 2, keep]
+    if band.size == 0:
+        return []
+    return [int(np.max(np.where(band[:, i])[0]) + 1) if band[:, i].any() else 0
+            for i in range(band.shape[1])]
+
+
+def outline_colour(rgb, clear, tile):
+    """The dark border the art draws around each cell, which is what a covered join should look like."""
+    rows, cols = clear.shape[0] // tile, clear.shape[1] // tile
+    ring = np.zeros(clear.shape, bool)
+    for r in range(rows):
+        for c in range(cols):
+            y, x = r * tile, c * tile
+            ring[y, x:x + tile] = ring[y + tile - 1, x:x + tile] = True
+            ring[y:y + tile, x] = ring[y:y + tile, x + tile - 1] = True
+
+    pixels = rgb[ring & ~clear]
+    if len(pixels) == 0:
+        return None
+    lum = pixels @ LUMINANCE
+    darkest = pixels[lum <= np.percentile(lum, OUTLINE_DARKEST_PERCENT)]
+    mean = (darkest if len(darkest) else pixels).mean(axis=0).round().astype(int)
+    return int(mean[0]) << 16 | int(mean[1]) << 8 | int(mean[2])
+
+
+def derive_backing(im, tile):
+    """
+    The TILESETS `backing` entry for a tileset whose art stops short of its cells.
+
+    Everything is measured off the packed sheet. Nothing here is copied from tiles-soil, whose numbers
+    were chosen by eye for one particular set of art and mean nothing for anybody else's.
+    """
+    a = np.array(im)
+    rgb, clear = a[:, :, :3].astype(int), a[:, :, 3] <= ALPHA_CUT
+    rows, cols = clear.shape[0] // tile, clear.shape[1] // tile
+
+    deepest, typical = [], []
+    for r in range(rows):
+        for c in range(cols):
+            box = clear[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile]
+            for view in cell_views(box).values():
+                depths = clear_depths(view, tile)
+                if depths:
+                    deepest.append(max(depths))
+                    typical.append(int(np.percentile(depths, SEAM_TYPICAL_PERCENT)))
+
+    colour = outline_colour(rgb, clear, tile)
+    if colour is None:
+        return None
+
+    inset = max(deepest) if deepest else 0
+    # A strip may reach further out than the fill, never less far: the gap runs to the corner.
+    return {"color": colour, "inset": int(inset),
+            "seamInset": int(min(max(typical) if typical else 0, inset))}
+
+
+def hex_colour(value):
+    return "0x{:06x}".format(value)
+
+
+def audit_packed_tileset(sheet_path, tile):
+    """
+    The seam audit, run on a packed tileset rather than on a generation.
+
+    Separate from audit_tileset because it answers a question about a finished sheet - "does this one
+    need a backing, and which one?" - which is worth asking of the tilesets already in public/assets
+    and not only of art that has just been drawn.
+    """
+    im = load(sheet_path)
+    clear = np.array(im.getchannel("A")) <= ALPHA_CUT
+    if im.size[0] % tile or im.size[1] % tile:
+        raise SystemExit("{} is {}x{}, which is not a whole number of {}px tiles"
+                         .format(os.path.basename(sheet_path), im.size[0], im.size[1], tile))
+
+    seams = boundary_seams(clear, tile)
+    return {"sheet": os.path.basename(sheet_path),
+            "width": int(im.size[0]), "height": int(im.size[1]),
+            "columns": im.size[0] // tile, "rows": im.size[1] // tile,
+            "seams": seams,
+            "backing": derive_backing(im, tile) if seams else None}
+
+
+def seam_note(seams, backing):
+    """One line saying which boundaries are see-through and what will be done about it."""
+    columns = [str(s["at"]) for s in seams if s["axis"] == "column"]
+    rows = [str(s["at"]) for s in seams if s["axis"] == "row"]
+    where = ", ".join(filter(None, ["columns " + ", ".join(columns) if columns else "",
+                                    "rows " + ", ".join(rows) if rows else ""]))
+    fix = ("a backing of {} at inset {}, seamInset {} is derived on accepting, which fills them"
+           .format(hex_colour(backing["color"]), backing["inset"], backing["seamInset"])
+           if backing else "no backing could be derived, because the sheet has no opaque outline")
+    return ("{} cell boundar{} see-through ({}), so tiles drawn side by side show a hairline gap: {}"
+            .format(len(seams), "y is" if len(seams) == 1 else "ies are", where, fix))
+
+
+def audit_tileset(src_path, tile, entry, packed_path=None):
     """
     What is in a tileset. `entry` is what build_tileset already worked out, so the columns and rows
     reported are the ones it packed rather than a second opinion about the same image.
@@ -397,6 +560,13 @@ def audit_tileset(src_path, tile, entry):
     The 3x3 flag is the one that matters. autotile() picks a piece by edge, top-left through
     bottom-right, so a tileset that is not nine pieces in that order cannot be laid into a level's
     ground layer: it would load, register, and then draw the wrong tile everywhere.
+
+    Seams are the other finding, and they are deliberately NOT a flag. A tileset whose art stops a
+    pixel short of its cells is perfectly good art with a hairline gap at every join, and the game
+    already knows how to hide that - a `backing` in its TILESETS entry, which accepting derives from
+    this audit. Refusing the asset over something the accept step fixes on its own would be refusing
+    tiles-soil, which ships with exactly this defect and has looked right since the day it was drawn.
+    So it is reported, loudly, with the boundaries named and the backing that will be used.
     """
     im, facts = measure(src_path)
     a = np.array(im.getchannel("A")) > ALPHA_CUT
@@ -413,9 +583,19 @@ def audit_tileset(src_path, tile, entry):
                      "layer (top-left, top, top-right / left, centre, right / bottom-left, bottom, "
                      "bottom-right)".format(columns, row_count))
 
+    # Measured on the packed sheet, not the source: the gaps are made by where build_tileset cut the
+    # cells and put them on an exact grid, so the source cannot answer this and only the output can.
+    seams, backing, notes = [], None, []
+    if packed_path:
+        packed = audit_packed_tileset(packed_path, tile)
+        seams, backing = packed["seams"], packed["backing"]
+        if seams:
+            notes.append(seam_note(seams, backing))
+
     return dict(facts, kind="tileset", expectedFrames=9, impliedFrames=columns * row_count,
                 dividesEvenly=None, columns=columns, rows=row_count,
-                cell={"width": tile, "height": tile}, frames=cells, flags=flags, notes=[])
+                cell={"width": tile, "height": tile}, frames=cells, flags=flags, notes=notes,
+                seams=seams, backing=backing)
 
 
 def audit_single(src_path, width, height):
@@ -505,8 +685,33 @@ def run_single(argv):
         if tile < 1:
             raise SystemExit("a tile has to be at least one pixel")
         entry = build_tileset(src, key, tile, report)
-        audit = audit_tileset(src, tile, entry)
         written = os.path.join(OUT, "tiles", key + ".png") if entry else None
+        audit = audit_tileset(src, tile, entry, written)
+    elif mode == "--seams":
+        # No packing, no output: just look at a tileset that already exists and say whether the game
+        # needs a backing to hide its joins, and which one. Run it over public/assets/tiles/*.png.
+        if len(rest) != 2:
+            raise SystemExit("usage: --seams <packed-tileset.png> <tile>")
+        sheet, tile = rest[0], int(rest[1])
+        if tile < 1:
+            raise SystemExit("a tile has to be at least one pixel")
+        packed = audit_packed_tileset(sheet, tile)
+        if as_json:
+            print(json.dumps(packed))
+        else:
+            print("{}: {}x{}, {}x{} cells of {}px".format(packed["sheet"], packed["width"], packed["height"],
+                                                          packed["columns"], packed["rows"], tile))
+            if not packed["seams"]:
+                print("  no see-through cell boundaries: this tileset needs no backing")
+            else:
+                for seam in packed["seams"]:
+                    print("  SEAM   {} {} is {}% transparent"
+                          .format(seam["axis"], seam["at"], seam["transparentPercent"]))
+                backing = packed["backing"]
+                print("  backing: {{ color: {}, inset: {}, seamInset: {} }}"
+                      .format(hex_colour(backing["color"]), backing["inset"], backing["seamInset"])
+                      if backing else "  no backing could be derived: the sheet has no opaque outline")
+        return 0
     elif mode == "--single":
         if len(rest) != 4:
             raise SystemExit("usage: --single <src.png> <key> <width> <height> --out <dir>")
@@ -517,8 +722,8 @@ def run_single(argv):
         # manifest run has always used; the key decides, not a flag.
         written = os.path.join(OUT, "bg" if key.startswith("bg-") else "ui", key + ".png")
     else:
-        raise SystemExit('unknown mode "{}". Try --strip, --tileset or --single, or no flags at all '
-                         "for the manifest run.".format(mode))
+        raise SystemExit('unknown mode "{}". Try --strip, --tileset, --single or --seams, or no flags '
+                         "at all for the manifest run.".format(mode))
 
     result = {"ok": entry is not None, "mode": mode.lstrip("-"), "key": key, "source": src,
               "written": written, "entry": entry, "audit": audit, "report": report}
