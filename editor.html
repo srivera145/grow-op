@@ -83,6 +83,9 @@
 
       .fields { display: flex; flex-direction: column; gap: 4px; }
       .field { display: flex; gap: 6px; align-items: center; color: var(--dim); }
+      /* `display: flex` above beats the hidden attribute's UA rule, so a hidden field would still show.
+         The Art panel hides the parameters a kind does not have, which is the only place this bites. */
+      .field[hidden] { display: none; }
       .field span { width: 4.5em; flex: none; }
       .field input { flex: 1; min-width: 0; padding: 2px 6px; }
 
@@ -116,7 +119,8 @@
       #generate .size { margin-top: 6px; }
       #generate .buttons { margin-top: 6px; }
       #generate-run { width: 100%; margin-top: 6px; }
-      #generate-preview {
+      #generate-preview,
+      #art-preview {
         display: block;
         width: 100%;
         height: auto;
@@ -125,6 +129,28 @@
         border-radius: 3px;
         image-rendering: pixelated;
       }
+
+      /* The Art panel. Its preview is a sheet at 4x with the frame cells drawn on it, so it must not
+         be smoothed by the browser on the way to the screen - see image-rendering above. */
+      #art .fields { margin-top: 6px; }
+      #art .buttons { margin-top: 6px; }
+      #art select, #art input[type='text'] { flex: 1; min-width: 0; }
+      #art textarea { margin-top: 6px; }
+      #art-run, #art-repack-raw { width: 100%; margin-top: 6px; }
+      #art-raws { width: 100%; margin-top: 4px; }
+      table.audit {
+        width: 100%;
+        margin-top: 8px;
+        border-collapse: collapse;
+        color: var(--dim);
+      }
+      table.audit th {
+        text-align: left;
+        font-weight: normal;
+        padding: 1px 8px 1px 0;
+        white-space: nowrap;
+      }
+      table.audit td { color: var(--text); word-break: break-word; }
 
       .problems { list-style: none; margin: 0; padding: 0; }
       .problems li { padding: 3px 0 3px 14px; text-indent: -14px; }
@@ -169,6 +195,7 @@
     </header>
     <aside>
       <div id="generate"></div>
+      <div id="art"></div>
       <div id="palette"></div>
     </aside>
     <main>

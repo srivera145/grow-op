@@ -38,6 +38,7 @@ export const TILESETS = {
   'tiles-pot': { file: 'assets/tiles/tiles-pot.png', tileCount: 3, columns: 3 },
   'tiles-stone': { file: 'assets/tiles/tiles-stone.png', tileCount: 3, columns: 3 },
   'tiles-tent-floor': { file: 'assets/tiles/tiles-tent-floor.png', tileCount: 3, columns: 3 },
+  'tiles-hydro-grate': { file: 'assets/tiles/tiles-hydro-grate.png', firstGid: 1, tileCount: 9, columns: 3, layout: 'edges3x3' },
 };
 
 // Interface images. hud-icons is one row of icons; FRAME names which icon, counted from the left, shows what.

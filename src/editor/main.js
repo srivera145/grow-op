@@ -1,5 +1,6 @@
 import { autotile } from '../../tools/autotile-core.mjs';
 import { PARALLAX } from '../config/constants.js';
+import { Art } from './Art.js';
 import { Generate } from './Generate.js';
 import { Grid, History } from './Grid.js';
 import { ObjectLayer } from './Objects.js';
@@ -564,6 +565,18 @@ It has changes that have not been saved, and this cannot be undone.`)) {
   },
 });
 
+/**
+ * The Art panel.
+ *
+ * It owns everything about making an asset and nothing about the level on the canvas, so unlike
+ * Generate it has no accept handler to answer to: a tileset or a background that gets accepted is
+ * registered in constants.js by the server, which reloads this page, and the reload is what puts a new
+ * tileset in the dropdown. Nothing here has to be told about it.
+ */
+const artPanel = new Art(document.getElementById('art'), {
+  onRegistered: (answer) => say(`${answer.key} registered in ${answer.registered.where}. Reloading the editor to pick it up.`, 'warn'),
+});
+
 function say(message, severity = 'ok') {
   savedText.textContent = message;
   savedText.style.color = severity === 'error' ? '#e8443a' : severity === 'warn' ? '#ffd60a' : '#8fae97';
@@ -788,6 +801,17 @@ if (UNDER_VITE) {
       };
     },
     useDraft: () => generate.use(),
+    // The Art panel's audit, judged without generating anything: the packed result and its audit are
+    // handed in the same shape a route answers with. Flattened, because it crosses into a test runner.
+    offerArt: (packed) => {
+      const verdict = artPanel.offer(packed);
+      return { ok: verdict.ok, key: verdict.key, flags: verdict.flags, canAccept: !document.getElementById('art-accept').hidden };
+    },
+    artKind: (kind) => {
+      document.getElementById('art-kind').value = kind;
+      artPanel.applyKind();
+    },
+    artRequest: () => artPanel.request(),
     index: () => levelIndex,
     setMeta: (meta) => palette.setMeta(meta),
     saveIndex: (index) => palette.handlers.onSaveIndex(index ?? palette.readIndex()),

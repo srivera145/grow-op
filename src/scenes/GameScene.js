@@ -75,12 +75,21 @@ export default class GameScene extends Phaser.Scene {
 
     // Ground
     this.map = this.make.tilemap({ key: this.level.key });
-    // The tileset's name in the map, its entry in TILESETS and its texture key are all the same string.
+    // A level's entry in TILESETS and its texture key are the same string. The name inside the map is
+    // not, and that distinction is what lets a level change tileset without its map being rewritten:
+    // every Grow Op map carries one tileset block, always called tiles-soil because that is what the
+    // editor and Tiled write, and it describes the grid - firstgid, nine tiles, three columns. Which
+    // image is painted onto that grid is the level's own choice, out of the index. So the block is
+    // looked up by whatever it calls itself and handed this level's texture. Asking Phaser for a block
+    // named tiles-stone in a map that has no such block gets a warning and a null layer.
     const tilesetDef = TILESETS[this.level.tileset];
-    const tileset = this.map.addTilesetImage(this.level.tileset, this.level.tileset);
+    const blockName = this.map.tilesets[0]?.name ?? this.level.tileset;
+    const tileset = this.map.addTilesetImage(blockName, this.level.tileset);
     this.groundLayer = this.map.createLayer('ground', tileset, 0, 0);
-    // Every gid the tileset owns is solid, whichever edge piece it is. Only gid 0 is empty.
-    this.groundLayer.setCollisionBetween(tilesetDef.firstGid, tilesetDef.firstGid + tilesetDef.tileCount - 1);
+    // Every gid the tileset owns is solid, whichever edge piece it is. Only gid 0 is empty. A tileset
+    // registered without a firstGid starts at 1, which is where every map the editor writes starts.
+    const firstGid = tilesetDef.firstGid ?? 1;
+    this.groundLayer.setCollisionBetween(firstGid, firstGid + tilesetDef.tileCount - 1);
     this.addGroundBacking(tilesetDef.backing);
 
     // The world is the map, open at the bottom so gaps drop things out of it.

@@ -6,20 +6,21 @@ Two checks, both plain node scripts. There is no test framework and no CI config
 | --- | --- | --- |
 | `npm run check-levels` | Reads every level file and checks what it is worth | instant |
 | `npm run check-levels -- --reach` | Also walks each level: can a player get to all of it? | instant |
-| `npm run smoke` | Drives the real game in a real browser, ten suites | ~215s |
+| `npm run smoke` | Drives the real game in a real browser, eleven suites | ~215s |
 
 Run `npm run smoke` before committing anything that touches scoring, saving, or a scene.
 
 ## npm run smoke
 
-Ten end-to-end suites. Nine open the real game in Chrome and read state back out of the running Phaser
+Eleven end-to-end suites. Nine open the real game in Chrome and read state back out of the running Phaser
 instance through `window.__growop`, which `main.js` exposes in dev builds only. Nothing is stubbed: when a
-suite says a root rot split, a root rot really split. The tenth, `editor-generate.js`, drives the level
-editor the same way through `window.__editor`, judging layouts through the real parse, check and
-reachability path with the model's reply handed in rather than fetched - so it costs nothing to run.
+suite says a root rot split, a root rot really split. The other two drive the level editor the same way
+through `window.__editor`: `editor-generate.js` judges layouts through the real parse, check and
+reachability path, and `editor-art.js` repacks real PNGs through the real `tools/repack.py`. Both hand in
+what a model would have returned rather than fetching it, so neither costs anything to run.
 
 ```
-npm run smoke                 # all ten, headless
+npm run smoke                 # all eleven, headless
 npm run smoke -- --headed     # a visible browser, one suite at a time, for watching a failure
 npm run smoke -- save         # only suites whose filename contains "save"
 npm run smoke -- --jobs 1     # one at a time
@@ -32,6 +33,10 @@ a time with `node tests/<suite>.js` while a dev server is up.
 **The dev server.** If something is already answering on `http://localhost:5173/` it is used and left
 running. Otherwise a server is started for the run and stopped again at the end. A server you started
 yourself is never touched.
+
+**Python.** `editor-art.js` repacks real PNGs by the real `tools/repack.py`, so that one suite needs a
+Python with `numpy` and `Pillow` on it (`pip install numpy pillow`). If it is not there the suite says so
+in as many words rather than failing on a status code. Nothing else in the run needs Python.
 
 **Chrome.** `puppeteer-core` drives a Chrome that is already installed rather than downloading its own, so
 installing this does not pull a browser. The usual install locations are checked; if yours is somewhere
@@ -57,6 +62,7 @@ other down more than the parallelism wins back. Raise it with `--jobs` on a bigg
 | `score-carryover.js` | Score is per level. With a second level registered, a run total carried into the next level does not trip its NEW BEST flash, and each level files only what it earned. Replay resets the level's earnings and leaves the records alone. |
 | `grade-percentage.js` | Grades as a share of a level's maximum: the maximum is known before any level loads, a jar-only run is Shake, and taking everything in the level reaches 100% and Exotic. |
 | `grade-recompute.js` | A stored grade is recomputed from the stored score, upwards and downwards, so an old save never shows a grade its score no longer earns. With nothing scoreable in a level, grading falls back to absolute scores, warns once, and does not divide by zero. |
+| `editor-art.js` | The Art panel's audit, and what the dev server will write because of it. Two fixture strips - one drawn the way the prompt asks for, one drawn every way it asks you not to - are repacked through the real route, and the flagged one is refused an accept even when the request claims it has no flags. No image is generated and no key is used. |
 | `scoring-order.js` | A level is worth the same whatever order it is taken in: invincible contact splits a root rot exactly as a stomp does, minis still die outright, the slash still does nothing to either, other enemies are unchanged, and a nutrient-first run still reaches the full 2910. |
 
 ### Writing one

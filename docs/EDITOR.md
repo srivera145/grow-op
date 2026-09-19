@@ -14,8 +14,9 @@ says so on the page instead.
 
 ## What it edits
 
-One ground layer and one object layer, which is all a Grow Op level has. There is no tileset picker and
-no layer list on purpose: the soil set is the only tileset, and the editor never picks a tile piece.
+One ground layer and one object layer, which is all a Grow Op level has. There is no layer list and no
+tile-piece picker on purpose: the editor never chooses which of the nine pieces a cell gets. Which
+tileset a level is drawn with is one field in its index entry, not something painted per cell.
 
 It stores **solid or empty per cell** and nothing more. Which of the nine soil pieces a solid cell is
 drawn with — and written with — comes from `autotile()` in `tools/autotile-core.mjs`, the same function
@@ -139,6 +140,148 @@ call to the model in `.env`. A 120x17 level takes a model a few minutes to think
 `draft-2`, and so on) so the next Save cannot land on top of the level you had open. If what is on the
 canvas has unsaved changes, it asks first. Save is still the only thing that writes a file.
 
+## Generating art
+
+Describe an asset in the **Art** panel and a model draws one. What comes back is repacked by
+`tools/repack.py`, measured, and shown to you at 4x with every frame boxed. Nothing reaches
+`public/assets` until you accept it.
+
+```
+OPENAI_API_KEY=sk-proj-...          # in .env, which is gitignored. See .env.example
+OPENAI_IMAGE_MODEL=gpt-image-1      # no default: unset fails, naming this variable
+```
+
+Read by the dev server and by nothing else, deliberately **not** `VITE_` prefixed, exactly like the two
+level-generating variables above. `npm run build` contains no key, no art route and no panel.
+
+> Note the spelling: `OPENAI_IMAGE_MODEL`. An earlier `.env` here had `OPENAI_IMAGE_MODAL`, which is
+> nothing at all, and a variable that is nothing looks exactly like a variable that is unset. If the
+> route finds the misspelling and not the real name it says so by name rather than making you guess.
+
+### The kinds, and what accepting one does
+
+| Kind | Lands in | Accepting registers | Usable straight away? |
+| --- | --- | --- | --- |
+| Parallax background | `public/assets/bg/` | `PARALLAX` in `constants.js`, with your scroll factor | yes |
+| Tileset | `public/assets/tiles/` | `TILESETS` in `constants.js`, and the tileset dropdown | yes |
+| Enemy | `public/assets/sheets/` | nothing | **no** — see below |
+| Pickup | `public/assets/sheets/` | nothing | **no** |
+| Effect | `public/assets/sheets/` | nothing | **no** |
+
+The first two are data all the way down, so accepting really does finish them: a registered tileset is
+in the dropdown after the reload, and a registered background is on screen the next time a level starts.
+
+The last three are not, and the panel says so instead of pretending otherwise. **Art is the part of a new
+enemy a panel can finish.** What it cannot write is the animation entry that makes the sheet load at all,
+the class that makes the thing move, and — the one that goes wrong quietly — the line in
+`objectValues()` in `src/state/levelScore.js`. An enemy or pickup missing from that table is worth zero,
+which lowers the maximum score of **every level containing one**, which hands out grades nobody earned.
+`npm run check-levels` fails on it and so does the game's own console, but the cheapest place to find out
+is when the art lands, so accepting names the file.
+
+Accepting an enemy prints the whole list: `animations.js`, the enemy class, `levelScore.js`,
+`format.js` for the editor's palette, and `parse.mjs` for the level generator's legend.
+
+### What the model is told
+
+Two halves, and they are not equal. Your description is the **subject**. The **house style** is
+`tools/generate/art-prompt.mjs`, it is the same block every time, it goes last, and it says in so many
+words that it overrides anything in the description that contradicts it. A description reading "smooth
+3D render on a white background" is a description of a spider mite that gets drawn in this style anyway.
+
+That is not tidiness. Every rule in the style block is load-bearing downstream: transparent background,
+hard pixel edges, no anti-aliasing, a 1px dark outline, the project's palette, evenly spaced frames with
+transparent columns between them, feet on the bottom row. `repack.py` **finds frames by looking for the
+transparent columns between them** and scales each frame off its own alpha bounds. Art on a white
+background does not come out as a wonky sprite; it comes out as four crops of a white rectangle.
+
+The palette in that file was sampled from the PNGs already in `public/assets` — the most common opaque
+colours across every sheet and tileset — rather than chosen.
+
+### What comes back, and the audit
+
+Every generation is measured before you can do anything with it. All of it is read off the real PNG:
+
+| | |
+| --- | --- |
+| image | the dimensions that actually came back |
+| alpha channel | whether there is one at all |
+| transparent | what percentage of the image is nothing |
+| width / frames | whether the width divides evenly by the frame count |
+| frames found | how many separate shapes are in the strip, against how many were asked for |
+| grid | for a tileset, the columns and rows that were found |
+| edge seam | for a background, how far its left and right edges are from matching |
+| cell | the frame box the art is being packed into |
+| content | the bounding box of each frame, so a frame far bigger than its cell is visible |
+
+**Four things are flags, and a flagged asset cannot be accepted.** Not greyed out with an override: the
+Accept button is not offered, and the route refuses it too, from its own record of the audit rather than
+from anything the page sends. They are: no alpha channel; under 20% transparent; a width that does not
+divide by the frame count; and a frame count that is not the one asked for. A tileset that is not 3x3
+is also a flag, because the autotiler lays nine pieces by edge and anything else draws the wrong tile
+everywhere.
+
+Everything else is a note, shown but not blocking — a frame bigger than its cell is scaled down to fit,
+which is usually fine, and a background whose edges do not match will show its join when it repeats.
+
+### Getting it wrong is free the second time
+
+Every image the API returns is written to **`.art-raw/`** — gitignored, named with the key and the
+minute — before anything is done to it. The frame count is the thing that goes wrong, and without the
+raw strip the only way to fix a wrong one is to pay for the picture again.
+
+So: pick the raw generation in **Raw generations**, change Frames or the cell size, and press **Repack**.
+No API call, no money. Repack as many times as you like until the audit is clean.
+
+```
+.art-raw/thrips-walk-202609191834.png          the generation, untouched
+.art-raw/repacked/thrips-walk-.../sheets/...   each repack of it, with the audit beside it
+```
+
+### Cost, and what does not happen
+
+One press of **Generate this asset** is one paid image generation, to the model in `.env`. The button is
+disabled while one is in flight and the route refuses a second at the same time. **Nothing retries on its
+own.** A key that already exists is refused before the request is made, naming the file in the way, so a
+name that was already taken never costs anything. Existing art is never overwritten — re-exporting is
+something you do on purpose with the manifest run, not something a panel does while you try out names.
+
+### Accepting reloads the editor
+
+Registering a tileset or a background edits `constants.js`, which this page imports, so Vite reloads the
+editor — and that reload is *how* a new tileset reaches the dropdown. The report telling you what landed
+survives it and is shown again on the way back in.
+
+### The repacker
+
+`tools/repack.py` is the repacker, and there is only one of it. The dev server shells out to it rather
+than reimplementing anything in JavaScript, the same way the editor imports `autotile-core.mjs` instead
+of keeping a second autotiler. Two implementations of "where does a frame start" would disagree
+eventually, and the day they disagree is the day generated art stops matching the art beside it.
+
+It needs Python with `numpy` and `Pillow`. `python3` is tried first, then `python`, then `py`, and each
+is tried by whether it can import those two — so a missing dependency is a sentence up front rather than
+a stack trace later.
+
+```
+pip install numpy pillow
+```
+
+The manifest run is untouched by any of this:
+
+```
+python3 tools/repack.py <source-art-dir> <output-dir>     # the whole known asset list, as always
+python3 tools/repack.py --strip   <src.png> <key> <frames> <fw> <fh> <align> --out <dir> [--json]
+python3 tools/repack.py --tileset <src.png> <key> <tile> --out <dir> [--json]
+python3 tools/repack.py --single  <src.png> <key> <width> <height> --out <dir> [--json]
+```
+
+The three single-asset modes are what the Art panel uses, and they exist because an asset nobody has
+made yet has no line in the manifest by definition. They call the same `build_strip`, `build_tileset`
+and `build_single`, over the same `col_blobs`, `content_box`, `clean_alpha` and `place`, so for the same
+inputs they produce byte-identical output to the manifest run. `align` is `bottom` (feet on the floor),
+`center`, `strip` (keep vertical motion within the strip) or `norm` (rescale every frame to one height).
+
 ## The level list
 
 `public/levels/index.json` is the list of levels, in order, and it is data - adding a level never means
@@ -152,9 +295,16 @@ used, and the game fetches it before it starts.
 ```
 
 Only `key` is required. `name` falls back to the key, `label` to the key's trailing segment, `tileset` to
-`tiles-soil`. Tileset is a dropdown built from `TILESETS` in `constants.js`, not free text: the tilesets
-are a fixed set the game knows how to load, and a typo only shows up later as a level that will not build. A level's file is always `levels/<key>.json`, worked out rather than stored, so a key and
-its file cannot drift apart.
+`tiles-soil`. Tileset is a dropdown built from `TILESETS` in `constants.js`, not free text: a typo in a
+box would only show up later as a level that will not build. The Art panel appends to that list when a
+generated tileset is accepted, so the dropdown grows without anyone editing source. A level's file is
+always `levels/<key>.json`, worked out rather than stored, so a key and its file cannot drift apart.
+
+A level's map file always carries one tileset block, named `tiles-soil`, because that is what Tiled and
+the editor write. That block is the *grid* - nine tiles, three columns, starting at gid 1 - and the
+tileset in the index is which *image* gets painted onto it. `GameScene` looks the block up by what it
+calls itself and hands it the level's texture, which is what lets a level change tileset without its map
+being rewritten.
 
 The order is the order of the game. The first entry is where a new game starts, and each level's Next is
 the one after it, with the last wrapping back to the first. An entry can carry its own `next` to break
@@ -271,10 +421,14 @@ other change.
 | `src/editor/validate.js` | the checks above |
 | `src/editor/reachability.mjs` | the solver: can a player get to all of it? |
 | `src/editor/Generate.js` | the Generate panel: description, request, verdict, accept or discard |
-| `tools/generate/prompt.mjs` | what the model is told, built from the live constants |
+| `src/editor/Art.js` | the Art panel: kind, description, generate, audit, preview, accept or discard |
+| `tools/generate/prompt.mjs` | what the model is told for a level, built from the live constants |
+| `tools/generate/art-prompt.mjs` | what an image model is told, and what each asset kind means downstream |
+| `tools/repack.py` | the repacker: the manifest run, and one asset at a time for the Art panel |
 | `tools/generate/parse.mjs` | the ASCII layout to a grid and a list of objects |
-| `.env.example` | the two variables generating needs, and where they are read |
+| `.env.example` | the four variables generating needs, and where they are read |
+| `.art-raw/` | gitignored: every raw generation, kept so a repack never costs a second one |
 | `tools/autotile-core.mjs` | `autotile()` and `serialize()`, shared with the command line |
-| `vite.config.js` | the dev-only save and generate routes, and the build that deliberately excludes the editor |
+| `vite.config.js` | the dev-only save, generate and art routes, and the build that deliberately excludes the editor |
 | `public/levels/index.json` | the level list, in order |
 | `src/config/levels.js` | turns that list into `LEVELS` and `FIRST_LEVEL`, and fails loudly if it cannot |

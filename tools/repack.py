@@ -3,14 +3,37 @@
 Grow Op sprite repacker.
 Turns loose AI-generated pixel-art strips into grid-aligned Phaser spritesheets.
 
-Usage: python3 repack.py <source-art-dir> <output-dir>
+Three ways in. The first is the original, and is what built everything in public/assets:
+
+  python3 repack.py <source-art-dir> <output-dir>
+      The manifest run: every asset in the lists below, plus manifest.json and assets.js.
+
+  python3 repack.py --strip <src.png> <key> <frames> <fw> <fh> <align> --out <dir> [--json]
+      One strip, described on the command line rather than looked up, so an asset this file has
+      never heard of can be repacked. align is bottom | center | strip | norm.
+
+  python3 repack.py --tileset <src.png> <key> <tile> --out <dir> [--json]
+      One tileset, packed onto a <tile>px grid.
+
+  python3 repack.py --single <src.png> <key> <width> <height> --out <dir> [--json]
+      One still image, resized: a parallax layer, or anything else that is not animated.
+
+The two single-asset modes exist for the editor's Art panel, which generates a strip for an asset
+that by definition has no line in the lists below. They call the same build_strip and build_tileset
+the manifest run calls, so generated art is packed by exactly the code that packed the hand-made
+art, and --json adds an audit of the source image (see audit_strip) for the panel to show.
 """
 import os, sys, json
 import numpy as np
 from PIL import Image
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "assets"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "out"
+ARGV = sys.argv[1:]
+SINGLE = bool(ARGV) and ARGV[0].startswith("--")
+
+# The manifest run's two positional arguments. A single-asset run has no source directory - it is
+# given one file - and takes its output directory from --out, which overwrites OUT before it builds.
+SRC = "assets" if SINGLE else (ARGV[0] if len(ARGV) > 0 else "assets")
+OUT = "out" if SINGLE else (ARGV[1] if len(ARGV) > 1 else "out")
 
 PLAYER_W, PLAYER_H = 64, 64          # small form frame box
 BODY_TARGET        = 54              # small idle body height, sets the small form's shared scale
@@ -259,6 +282,259 @@ def write_assets_js(manifest):
         fh.write("\n".join(L) + "\n")
 
 
+# ---------------------------------------------------------------- auditing one generated image
+
+# Under this much transparency the "transparent background" instruction was not followed, and what
+# came back is art painted onto a filled rectangle. Repacking that cuts the rectangle into frames.
+MIN_TRANSPARENT_PERCENT = 20.0
+
+# Average per-channel difference between a background's left and right edge columns, above which
+# the repeat is something you can see rather than something you have to look for.
+SEAM_VISIBLE = 24.0
+
+
+def runs_of(occupied, merge_gap, min_length=0):
+    """
+    Runs of True in a boolean row, joined across gaps of up to merge_gap.
+
+    This is the scan col_blobs and build_tileset each open with, kept separately here because the
+    audit needs the answer they then throw away. col_blobs goes on to drop the narrowest blobs, or
+    to give up and divide the strip evenly, so that it always returns the number of frames it was
+    asked for - right for packing, and useless for auditing, where the entire question is whether
+    the art has the number of frames it was meant to have. Neither of those functions is touched.
+    """
+    out, start = [], None
+    for i, v in enumerate(occupied):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            out.append([start, i - 1]); start = None
+    if start is not None:
+        out.append([start, len(occupied) - 1])
+
+    merged = []
+    for r in out:
+        if merged and r[0] - merged[-1][1] <= merge_gap:
+            merged[-1][1] = r[1]
+        else:
+            merged.append(r)
+    return [r for r in merged if r[1] - r[0] >= min_length]
+
+
+def measure(src_path):
+    """The facts about an image that hold whatever it is meant to be: size, alpha, how much is empty."""
+    raw = Image.open(src_path)
+    # A palette image can carry transparency without being RGBA, so the mode alone is not the answer.
+    has_alpha = raw.mode in ("RGBA", "LA", "PA") or "transparency" in raw.info
+    im = raw.convert("RGBA")
+    alpha = np.array(im.getchannel("A"))
+    return im, {
+        "source": os.path.basename(src_path),
+        "width": int(im.size[0]),
+        "height": int(im.size[1]),
+        "hasAlpha": bool(has_alpha),
+        "transparentPercent": round(float((alpha <= ALPHA_CUT).mean() * 100), 1),
+    }
+
+
+def background_flags(facts):
+    """The two ways a generation comes back as a picture of a sprite rather than as a sprite."""
+    flags = []
+    if not facts["hasAlpha"]:
+        flags.append("{} has no alpha channel, so there is no background to cut away: every frame "
+                     "would be packed as a filled rectangle".format(facts["source"]))
+    if facts["transparentPercent"] < MIN_TRANSPARENT_PERCENT:
+        flags.append("only {}% of the image is transparent, under the {:.0f}% a cut-out sprite needs. "
+                     "This is art on a solid background rather than art on nothing"
+                     .format(facts["transparentPercent"], MIN_TRANSPARENT_PERCENT))
+    return flags
+
+
+def audit_strip(src_path, expected, frame_width, frame_height):
+    """
+    What is in a strip, measured against what was asked for.
+
+    Everything here is read off the source image. The repacked sheet is the right shape by
+    construction - build_strip pads whatever it finds into the cells it was given - so measuring the
+    output would only ever confirm the arithmetic, while the mistakes worth catching are all upstream
+    of it: a background that is not transparent, and a strip with the wrong number of frames in it.
+    """
+    im, facts = measure(src_path)
+    width = facts["width"]
+
+    implied = len(runs_of((np.array(im.getchannel("A")) > ALPHA_CUT).any(axis=0), merge_gap=12))
+    divides = expected > 0 and width % expected == 0
+
+    # The split the repack will actually use, so the per-frame sizes describe what gets packed.
+    boxes = [content_box(im, b[0], b[1]) for b in col_blobs(im, expected)]
+    frames = [{"index": i, "width": 0 if b is None else int(b[2] - b[0] + 1),
+               "height": 0 if b is None else int(b[3] - b[1] + 1)} for i, b in enumerate(boxes)]
+
+    flags = background_flags(facts)
+    if not divides:
+        flags.append("{}px does not divide into {} frames ({:.2f}px each), so the frames are not "
+                     "evenly spaced".format(width, expected, width / expected if expected else 0))
+    if implied != expected:
+        flags.append("{} separate shape{} found in the strip, not the {} frames asked for"
+                     .format(implied, "" if implied == 1 else "s", expected))
+
+    # Not a refusal: a frame too big for its cell is scaled down to fit rather than being clipped.
+    notes = ["frame {} is {}x{}, larger than the {}x{} cell, so it is scaled down to fit"
+             .format(f["index"] + 1, f["width"], f["height"], frame_width, frame_height)
+             for f in frames if f["width"] > frame_width or f["height"] > frame_height]
+
+    return dict(facts, kind="strip", expectedFrames=expected, impliedFrames=implied,
+                dividesEvenly=divides, frameWidth=width // expected if expected else 0,
+                cell={"width": frame_width, "height": frame_height},
+                frames=frames, flags=flags, notes=notes)
+
+
+def audit_tileset(src_path, tile, entry):
+    """
+    What is in a tileset. `entry` is what build_tileset already worked out, so the columns and rows
+    reported are the ones it packed rather than a second opinion about the same image.
+
+    The 3x3 flag is the one that matters. autotile() picks a piece by edge, top-left through
+    bottom-right, so a tileset that is not nine pieces in that order cannot be laid into a level's
+    ground layer: it would load, register, and then draw the wrong tile everywhere.
+    """
+    im, facts = measure(src_path)
+    a = np.array(im.getchannel("A")) > ALPHA_CUT
+    cols = runs_of(a.any(axis=0), merge_gap=6, min_length=9)
+    rows = runs_of(a.any(axis=1), merge_gap=6, min_length=9)
+    cells = [{"index": r * len(cols) + c, "width": int(cw[1] - cw[0] + 1),
+              "height": int(rh[1] - rh[0] + 1)}
+             for r, rh in enumerate(rows) for c, cw in enumerate(cols)]
+
+    columns, row_count = (entry["columns"], entry["rows"]) if entry else (len(cols), len(rows))
+    flags = background_flags(facts)
+    if (columns, row_count) != (3, 3):
+        flags.append("{}x{} tiles were found, not the 3x3 edge set the autotiler lays into a ground "
+                     "layer (top-left, top, top-right / left, centre, right / bottom-left, bottom, "
+                     "bottom-right)".format(columns, row_count))
+
+    return dict(facts, kind="tileset", expectedFrames=9, impliedFrames=columns * row_count,
+                dividesEvenly=None, columns=columns, rows=row_count,
+                cell={"width": tile, "height": tile}, frames=cells, flags=flags, notes=[])
+
+
+def audit_single(src_path, width, height):
+    """
+    What is in a still image: a parallax layer or a title image.
+
+    The transparency rule the strips and tilesets live by is deliberately not applied here, and it is
+    worth saying why rather than leaving it as an omission. A parallax layer is the back of the room.
+    It is meant to be opaque, every background already in the game is, and flagging one for having a
+    filled background would be flagging it for being correct.
+
+    What does matter for a layer is the seam. ParallaxBackground draws it as a tileSprite and slides it
+    sideways forever, so the right-hand column meets the left-hand column once per screen width; if
+    those two columns do not match, the join travels across the screen for the whole level.
+    """
+    im, facts = measure(src_path)
+    a = np.array(im.convert("RGB"), dtype=np.int16)
+    seam = round(float(np.abs(a[:, 0, :] - a[:, -1, :]).mean()), 1)
+
+    notes = []
+    if width and (facts["width"] < width or facts["height"] < height):
+        notes.append("the source is {}x{}, smaller than the {}x{} it will be drawn at, so it is being "
+                     "scaled up and will look soft".format(facts["width"], facts["height"], width, height))
+    if seam > SEAM_VISIBLE:
+        notes.append("the left and right edges differ by {} of 255 on average, so the join will be "
+                     "visible each time the layer repeats".format(seam))
+
+    return dict(facts, kind="single", expectedFrames=1, impliedFrames=1, dividesEvenly=None,
+                seamDifference=seam, cell={"width": width or facts["width"], "height": height or facts["height"]},
+                frames=[{"index": 0, "width": facts["width"], "height": facts["height"]}],
+                flags=[], notes=notes)
+
+
+# ---------------------------------------------------------------- one asset, by parameters
+
+ALIGNMENTS = ("bottom", "center", "strip", "norm")
+
+
+def take(rest, name):
+    """Pulls `--name value` out of the argument list, leaving the positional arguments behind."""
+    if name not in rest:
+        return None, rest
+    at = rest.index(name)
+    if at + 1 >= len(rest):
+        raise SystemExit("{} needs a value".format(name))
+    return rest[at + 1], rest[:at] + rest[at + 2:]
+
+
+def run_single(argv):
+    """
+    --strip and --tileset: repack one image, described on the command line.
+
+    Nothing is written anywhere near public/assets. The caller names an output directory and gets a
+    packed sheet and an audit back; deciding whether that sheet is good enough to become an asset is
+    somebody else's job, which is the point of handing back the audit rather than a verdict.
+    """
+    global OUT
+    mode, rest = argv[0], list(argv[1:])
+    as_json = "--json" in rest
+    rest = [a for a in rest if a != "--json"]
+    out, rest = take(rest, "--out")
+    if out:
+        OUT = out
+
+    for d in ("sheets", "tiles", "bg", "ui"):
+        os.makedirs(os.path.join(OUT, d), exist_ok=True)
+    report = []
+
+    if mode == "--strip":
+        if len(rest) != 6:
+            raise SystemExit("usage: --strip <src.png> <key> <frames> <fw> <fh> <align> --out <dir>")
+        src, key = rest[0], rest[1]
+        frames, fw, fh, align = int(rest[2]), int(rest[3]), int(rest[4]), rest[5]
+        if align not in ALIGNMENTS:
+            raise SystemExit('align must be one of {}, not "{}"'.format(", ".join(ALIGNMENTS), align))
+        if frames < 1:
+            raise SystemExit("a strip needs at least one frame")
+        audit = audit_strip(src, frames, fw, fh)
+        # Packed even when the audit flags it. A flagged sheet is exactly the thing somebody has to
+        # look at before deciding, and refusing to produce it would leave them nothing to look at.
+        entry = build_strip(src, key, frames, fw, fh, align, None, report)
+        written = os.path.join(OUT, "sheets", key + ".png")
+    elif mode == "--tileset":
+        if len(rest) != 3:
+            raise SystemExit("usage: --tileset <src.png> <key> <tile> --out <dir>")
+        src, key, tile = rest[0], rest[1], int(rest[2])
+        if tile < 1:
+            raise SystemExit("a tile has to be at least one pixel")
+        entry = build_tileset(src, key, tile, report)
+        audit = audit_tileset(src, tile, entry)
+        written = os.path.join(OUT, "tiles", key + ".png") if entry else None
+    elif mode == "--single":
+        if len(rest) != 4:
+            raise SystemExit("usage: --single <src.png> <key> <width> <height> --out <dir>")
+        src, key, w, h = rest[0], rest[1], int(rest[2]), int(rest[3])
+        audit = audit_single(src, w, h)
+        entry = build_single(src, key, w, h)
+        # build_single files a bg- key under bg/ and everything else under ui/, which is the rule the
+        # manifest run has always used; the key decides, not a flag.
+        written = os.path.join(OUT, "bg" if key.startswith("bg-") else "ui", key + ".png")
+    else:
+        raise SystemExit('unknown mode "{}". Try --strip, --tileset or --single, or no flags at all '
+                         "for the manifest run.".format(mode))
+
+    result = {"ok": entry is not None, "mode": mode.lstrip("-"), "key": key, "source": src,
+              "written": written, "entry": entry, "audit": audit, "report": report}
+
+    if as_json:
+        print(json.dumps(result))
+    else:
+        print("{}: {}x{} source, {}% transparent -> {}".format(
+            key, audit["width"], audit["height"], audit["transparentPercent"], written))
+        for line in report + audit["notes"]:
+            print("  note   " + line)
+        for line in audit["flags"]:
+            print("  FLAG   " + line)
+    return 0 if entry else 1
+
+
 def main():
     for d in ("sheets", "tiles", "bg", "ui"):
         os.makedirs(os.path.join(OUT, d), exist_ok=True)
@@ -315,7 +591,10 @@ def main():
 
     print("\n".join(report))
     print(f"\nwrote {len(manifest)} assets to {OUT}/")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # A leading flag means one asset, described on the command line. Anything else is the manifest
+    # run, which is untouched by all of the above and still the only thing that writes manifest.json.
+    sys.exit(run_single(ARGV) if SINGLE else main())

@@ -3,3 +3,7 @@ dist/
 .DS_Store
 .vscode
 .env
+
+# Raw image generations from the editor's Art panel, kept so a strip can be repacked with
+# different parameters without paying to generate it again. Not art until it is accepted.
+.art-raw/
