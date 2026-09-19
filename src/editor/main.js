@@ -745,6 +745,20 @@ document.getElementById('redo').addEventListener('click', () => history.redo());
 
 // ---------------------------------------------------------------- test seam
 
+/** A Generate verdict as plain values, for a test runner where a level object means nothing. */
+function flattenVerdict(verdict) {
+  if (!verdict) return null;
+  return {
+    ok: verdict.ok,
+    problems: verdict.problems.map((problem) => `${problem.severity}: ${problem.message}`),
+    pads: (verdict.pads ?? []).map((pad) => pad.message),
+    stranded: (verdict.reach?.stranded ?? []).map((object) => `${object.name} at ${Math.floor(object.x / TILE)},${Math.floor(object.y / TILE)}`),
+    objects: verdict.level?.objects.length ?? 0,
+    solid: verdict.level ? verdict.level.cells.reduce((total, cell) => total + cell, 0) : 0,
+    size: verdict.level ? `${verdict.level.width}x${verdict.level.height}` : null,
+  };
+}
+
 /**
  * A handle for the automated editor checks, the same idea as window.__growop in the game. The editor
  * only ever runs under the dev server, but the guard says plainly that none of this is shipped.
@@ -790,16 +804,10 @@ if (UNDER_VITE) {
     unsaved: () => unsaved(),
     // Judges a layout exactly as a generated one is judged, without spending a request on one. The
     // verdict is flattened because it crosses into a test runner, where a level object means nothing.
-    offer: (reply, size) => {
-      const verdict = generate.offer(reply, size);
-      return {
-        ok: verdict.ok,
-        problems: verdict.problems.map((problem) => `${problem.severity}: ${problem.message}`),
-        stranded: (verdict.reach?.stranded ?? []).map((object) => `${object.name} at ${Math.floor(object.x / TILE)},${Math.floor(object.y / TILE)}`),
-        objects: verdict.level?.objects.length ?? 0,
-        size: verdict.level ? `${verdict.level.width}x${verdict.level.height}` : null,
-      };
-    },
+    offer: (reply, size) => flattenVerdict(generate.offer(reply, size)),
+    // The same judgement, on a reply already on disk. The route behind it makes no API call, which is
+    // the thing worth being able to check: a refused generation is free to try again.
+    reparse: async (raw) => flattenVerdict(await generate.reparse(raw)),
     useDraft: () => generate.use(),
     // The Art panel's audit, judged without generating anything: the packed result and its audit are
     // handed in the same shape a route answers with. Flattened, because it crosses into a test runner.

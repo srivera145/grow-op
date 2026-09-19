@@ -12,6 +12,21 @@ const root = dirname(fileURLToPath(import.meta.url));
 const LEVEL_DIR = resolve(root, 'public/levels');
 const INDEX_FILE = join(LEVEL_DIR, 'index.json');
 const NAME_PATTERN = /^[a-z0-9-]+$/;
+/**
+ * Where a generation's raw reply is kept, so a reply that did not parse can be parsed again for free.
+ *
+ * The same idea as .art-raw, for the same reason. A level generation is a paid call and several minutes
+ * of thinking, and the way it used to be lost was a single row coming back a character short. The
+ * parser now pads that (tools/generate/parse.mjs), but padding is not the whole answer: the next thing
+ * the parser refuses for will be something else, and when it is fixed the reply it refused should not
+ * have to be bought again. So every reply is written here before anything is done with it, with the
+ * request that produced it beside it, and the panel can rebuild a draft from one without an API call.
+ *
+ * Gitignored: these are working files, not levels. A level becomes a file when Save writes one.
+ */
+const LEVEL_RAW_DIR = resolve(root, '.level-raw');
+const LEVEL_RAW_PATTERN = /^[a-z0-9-]+\.json$/;
+const LEVEL_RAW_LISTED = 50; // newest first; a listing longer than this is a dropdown nobody reads
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 // A 200x24 layout is about 5k characters, so the layout itself is small. The ceiling is high because a
 // model that thinks before it draws spends that budget on the thinking, and a run that spends three
@@ -154,6 +169,8 @@ function levelGenerator(env) {
     name: 'growop-level-generator',
     apply: 'serve',
     configureServer(server) {
+      const log = (message) => server.config.logger.info(`  ${message}`);
+
       server.middlewares.use('/api/generate-level', async (request, response, next) => {
         if (request.method !== 'POST') return next();
         const reply = replier(response);
@@ -207,13 +224,62 @@ function levelGenerator(env) {
           const text = message.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
           const usage = { input: message.usage.input_tokens, output: message.usage.output_tokens };
           const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-          server.config.logger.info(`  level generated  ${model}  ${size.width}x${size.height}  ${usage.input} in / ${usage.output} out tokens  ${seconds}s`);
-          reply(200, { reply: text, model, usage, size, seconds: Number(seconds) });
+
+          // Written before the reply is judged, and before it is even known whether it can be read.
+          // That is the point: the generation worth keeping is the one that is about to fail. And a
+          // failure to write it is not allowed to become a failure to answer - a full disk must not be
+          // the thing that loses a generation, which is the whole complaint this keep exists to answer.
+          const raw = await keepRaw({ description, size, previous, model, usage, seconds: Number(seconds), stop: message.stop_reason, reply: text })
+            .catch((error) => {
+              log(`could not write this reply to .level-raw (${error.message}) - the draft is all there is of it`);
+              return null;
+            });
+          log(`level generated  ${model}  ${size.width}x${size.height}  ${usage.input} in / ${usage.output} out tokens  ${seconds}s${raw ? `  -> .level-raw/${raw}` : ''}`);
+          reply(200, { reply: text, model, usage, size, seconds: Number(seconds), raw });
         } catch (error) {
           // Whatever went wrong, only the message goes back. SDK errors carry the request, not the key.
           reply(error.status ?? error.statusCode ?? 502, { error: error.message });
         } finally {
           inFlight = false;
+        }
+      });
+
+      // GET /api/level-raw - every reply that has been generated, newest first, so one can be picked
+      // and parsed again. Costs nothing, so the panel refreshes it after every generation.
+      server.middlewares.use('/api/level-raw', async (request, response, next) => {
+        if (request.method !== 'GET') return next();
+        const reply = replier(response);
+
+        try {
+          reply(200, { files: await listRaws() });
+        } catch (error) {
+          reply(500, { error: error.message });
+        }
+      });
+
+      // POST /api/reparse-level - the same reply, read again. This is the route that makes a parse
+      // failure cost nothing the second time, so like /api/repack-art it deliberately takes no API key
+      // and makes no call: it reads a file off the disk and hands back what is already in it.
+      server.middlewares.use('/api/reparse-level', async (request, response, next) => {
+        if (request.method !== 'POST') return next();
+        const reply = replier(response);
+
+        try {
+          const { raw } = JSON.parse(await readBody(request));
+          const saved = await readRaw(String(raw ?? ''));
+          log(`level re-parsed  from .level-raw/${raw}  (no API call)`);
+          reply(200, {
+            raw,
+            reply: saved.reply,
+            size: clampSize(saved.size),
+            description: saved.description ?? '',
+            model: saved.model ?? null,
+            usage: saved.usage ?? null,
+            seconds: saved.seconds ?? null,
+            at: saved.at ?? null,
+          });
+        } catch (error) {
+          reply(error.statusCode ?? 500, { error: error.message });
         }
       });
     },
@@ -363,6 +429,80 @@ function artGenerator(env) {
       });
     },
   };
+}
+
+// ---------------------------------------------------------------- the level generator's working parts
+
+/**
+ * A readable file name for a generation, from the description that asked for it.
+ *
+ * A level has no key the way an asset does - it gets one when it is saved, which is long after this -
+ * so the description stands in for one. It only has to be recognisable in a dropdown weeks later; the
+ * timestamp beside it is what actually tells two apart.
+ */
+function rawName(description) {
+  const slug = String(description)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '');
+  return `${slug || 'level'}-${stamp()}.json`;
+}
+
+/** The whole generation on disk: the reply, and everything that was asked for to get it. */
+async function keepRaw(record) {
+  const name = rawName(record.description);
+  await mkdir(LEVEL_RAW_DIR, { recursive: true });
+  await writeFile(join(LEVEL_RAW_DIR, name), `${JSON.stringify({ at: new Date().toISOString(), ...record }, null, 2)}\n`, 'utf8');
+  return name;
+}
+
+/**
+ * One saved generation, by name.
+ *
+ * The name is matched against the pattern rather than joined and hoped for. It arrives in a request
+ * body, it becomes a path, and `[a-z0-9-]+.json` is a name that cannot climb out of the directory.
+ */
+async function readRaw(name) {
+  if (!LEVEL_RAW_PATTERN.test(name)) throw fail(400, `"${name}" is not a file in .level-raw`);
+  let text;
+  try {
+    text = await readFile(join(LEVEL_RAW_DIR, name), 'utf8');
+  } catch {
+    throw fail(404, `there is no .level-raw/${name} to re-parse`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw fail(500, `.level-raw/${name} is not readable as JSON (${error.message}), so there is nothing in it to re-parse`);
+  }
+}
+
+/** What is in .level-raw, newest first, with enough of each to tell them apart without opening one. */
+async function listRaws() {
+  const names = await readdir(LEVEL_RAW_DIR).catch(() => []);
+  const dated = await Promise.all(
+    names.filter((name) => LEVEL_RAW_PATTERN.test(name)).map(async (name) => {
+      const info = await stat(join(LEVEL_RAW_DIR, name));
+      return { name, bytes: info.size, at: info.mtime.toISOString() };
+    }),
+  );
+  dated.sort((a, b) => b.at.localeCompare(a.at));
+
+  return Promise.all(
+    dated.slice(0, LEVEL_RAW_LISTED).map(async (file) => {
+      // A generation that cannot be read still belongs in the list: it is the one somebody is looking
+      // for when something has gone wrong, and it is re-parse that will say what is the matter with it.
+      const saved = await readRaw(file.name).catch(() => ({}));
+      return {
+        ...file,
+        description: saved.description ?? '',
+        size: saved.size ? `${saved.size.width}x${saved.size.height}` : '',
+        tokens: saved.usage?.output ?? null,
+        seconds: saved.seconds ?? null,
+      };
+    }),
+  );
 }
 
 // ---------------------------------------------------------------- the art routes' working parts

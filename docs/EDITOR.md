@@ -116,29 +116,82 @@ That legend is checked against the game's own object list when the module loads,
 the game and not to the legend is an error at startup rather than a type no generated level can contain.
 A letter outside the legend is refused and named; it is never dropped.
 
-The reply is then held to the size that was asked for — a row of the wrong width, or the wrong number of
-rows, is a layout the model lost count in, and the parts of it that are right cannot be told from the
-parts that are not. The refusal names every row that is wrong at once, and those rows are what gets sent
-back with **Regenerate**.
+The reply is then held to the size that was asked for, with one deliberate piece of give. Counting to 120
+seventeen times over is the thing a model is least reliable at, and a 120x17 generation used to be thrown
+away in full because row 14 came back 119 characters — a paid call and several minutes of thinking, gone
+over one character. So:
+
+| What came back | What happens |
+| --- | --- |
+| a row short by up to 10% of the width | **padded on the right with empty space**, and reported |
+| a row short by more than that | refused, naming the row and both lengths |
+| a row longer than the width | refused, naming the row and the excess — never trimmed |
+| fewer rows than asked for | **empty rows added at the top**, and reported |
+| more rows than asked for | refused, naming both heights |
+
+**Padding cannot make an impossible level look possible.** A pad only ever adds empty space: it cannot
+add ground, so it cannot bridge a pit the model left, and it cannot add an object, so it cannot put back
+a jar the model forgot. What it *can* do is leave a hole where a floor was meant to run to the edge — so
+it fails in the safe direction, and the reachability solver catches it exactly as it catches a badly
+drawn one. Nothing below is loosened for a padded level.
+
+**And no pad is silent.** Every one is listed in the draft notes with the row and how much:
+
+```
++ Row 14 came in 119 characters, 1 short of 120, and was padded on the right with 1 empty cell.
+```
+
+Those lines also go back with **Regenerate**, so a model that is consistently short is told so while
+there is still a session left to correct it in. A level that was quietly repaired is a level that is
+subtly not the one on the screen, which is the one outcome worse than a refusal.
+
+A row that is *over* long is a different thing and is always refused: the characters that would be cut
+off the end are real content, and there is no way to know from here which of them was surplus. Too many
+rows is refused for the same reason. The refusal names every wrong row at once, not just the first.
 
 ### What gets checked before it loads
 
 In this order, cheapest first:
 
-1. **It parses.** The right size, and nothing outside the legend.
+1. **It parses.** The right size — after any padding above — and nothing outside the legend.
 2. **The editor's own checks,** the same ones in the Checks panel: one player-start, at least one
    goal-jar, nothing inside a wall, nothing under the map, and a player-start standing on ground.
 3. **It can be played.** The solver walks it (below). Every object has to be reachable, and so does the jar.
 
+A padded level goes through 2 and 3 exactly as an unpadded one does. Padding fixes transcription, not
+design, so none of these give an inch for it.
+
 **A level that fails any of those is not loaded.** It is shown as a thumbnail with the stranded objects
 ringed in red and listed underneath, and the only things offered are Regenerate and Discard. Regenerate
-sends the layout back with exactly what was wrong with it, and asks for another. Nothing retries on its
-own: one request per press, the button is disabled while one is in flight, and each press is a paid API
-call to the model in `.env`. A 120x17 level takes a model a few minutes to think through.
+sends the layout back with exactly what was wrong with it — and with anything that had to be padded — and
+asks for another. Nothing retries on its own: one request per press, the button is disabled while one is
+in flight, and each press is a paid API call to the model in `.env`. A 120x17 level takes a model a few
+minutes to think through. The reply is kept either way, so the second look at it is free (below).
 
 **Use this level** puts the draft on the canvas as unsaved work and renames the level box to `draft` (or
 `draft-2`, and so on) so the next Save cannot land on top of the level you had open. If what is on the
 canvas has unsaved changes, it asks first. Save is still the only thing that writes a file.
+
+### Re-parsing a saved reply is free
+
+Every reply is written to **`.level-raw/`** — gitignored, named from the description and the minute —
+before anything is done with it, along with the request that produced it. It is written *before* the reply
+is judged, which is the point: the generation worth keeping is the one that is about to fail.
+
+So a generation that was refused is never a generation that has to be bought again. Pick it in **Saved
+replies** and press **Re-parse the selected one**. That route has no API key and makes no call — it reads
+the file off the disk and hands back what is already in it — and the reply then goes through the identical
+path a fresh one takes: parse, the editor's own checks, the solver. Nothing is treated more kindly for
+having been paid for once already.
+
+```
+.level-raw/a-flooded-basement-grow-202609191834.json
+  { at, description, size, previous, model, usage, seconds, stop, reply }
+```
+
+Padding is the fix for the failure that was actually happening; this is the fix for the next one. When
+whatever refused a reply is changed — a parser rule, a check, the solver — the replies it refused are
+still on disk and can be run through the new code for nothing.
 
 ## Generating art
 
@@ -495,6 +548,7 @@ other change.
 | `tools/generate/parse.mjs` | the ASCII layout to a grid and a list of objects |
 | `.env.example` | the four variables generating needs, and where they are read |
 | `.art-raw/` | gitignored: every raw generation, kept so a repack never costs a second one |
+| `.level-raw/` | gitignored: every level reply and the request behind it, kept so a re-parse is free |
 | `tools/autotile-core.mjs` | `autotile()` and `serialize()`, shared with the command line |
 | `vite.config.js` | the dev-only save, generate and art routes, and the build that deliberately excludes the editor |
 | `public/levels/index.json` | the level list, in order |

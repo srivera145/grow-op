@@ -199,6 +199,7 @@ export const PARALLAX = [
   { key: 'bg-far-mylar', factor: 0.1 }, // grow tent back wall
   { key: 'bg-mid-lights', factor: 0.3 }, // light rigs
   { key: 'bg-near-leaves', factor: 0.6 }, // leaves, still behind the gameplay layer
+  { key: 'bg-mid-shelves', factor: 0.3 },
 ];
 
 export const RULES = {

@@ -7,3 +7,7 @@ dist/
 # Raw image generations from the editor's Art panel, kept so a strip can be repacked with
 # different parameters without paying to generate it again. Not art until it is accepted.
 .art-raw/
+
+# Raw level generations from the editor's Generate panel, kept with the request that produced them so a
+# reply that did not parse can be parsed again for free. Not a level until Save writes one.
+.level-raw/

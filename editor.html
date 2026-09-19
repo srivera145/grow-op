@@ -163,6 +163,11 @@
          either - it is the difference between one surface and a gap at every join. */
       .problems li.seam { color: #7ec8e3; }
       .problems li.seam::before { content: '~ '; }
+      /* A pad is its own severity too, and a '+' because that is literally what happened: empty space
+         was added to a row that came up short. Not a problem - the draft passed everything - but the
+         only place the level on the screen is said to differ from the one the model drew. */
+      .problems li.pad { color: #9d8cd6; }
+      .problems li.pad::before { content: '+ '; }
 
       .help { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; color: var(--dim); }
       .help dt { color: var(--text); white-space: nowrap; }

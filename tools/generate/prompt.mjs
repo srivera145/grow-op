@@ -125,7 +125,7 @@ if (EXAMPLE.some((row) => row.length !== EXAMPLE_WIDTH)) {
 // It also has to be a level that can actually be finished, checked by the same solver that judges what
 // comes back. An example nobody could play is an example of the wrong thing, and it is the one part of
 // the prompt that would never get played.
-if (!analyseReachability(parseLayout(EXAMPLE.join('\n'), { width: EXAMPLE_WIDTH, height: EXAMPLE.length })).ok) {
+if (!analyseReachability(parseLayout(EXAMPLE.join('\n'), { width: EXAMPLE_WIDTH, height: EXAMPLE.length }).level).ok) {
   throw new Error('the worked example in tools/generate/prompt.mjs is not a level that can be finished');
 }
 
@@ -145,10 +145,17 @@ function craft(width, height) {
 }
 
 /**
- * The whole request. `previous` is what came back last time and what was wrong with it, which is the
- * only thing that changes on a regenerate: the level is drawn again from the description with the
+ * The whole request. `previous` is what came back last time and what had to be said about it, which is
+ * the only thing that changes on a regenerate: the level is drawn again from the description with the
  * failure in front of it, rather than patched, because a layout with an unreachable corner is usually
  * wrong in its shape and not in one character.
+ *
+ * Two different things can be in there, and they are worded differently on purpose. `problems` is a
+ * level that was refused, so the layout is quoted back and the fix is the point. `pads` is a level that
+ * was taken - the short rows were filled with empty space - and the point is only that the counting
+ * went wrong and where, so that a model which is consistently short is told so while it still has the
+ * session to correct in. Neither of them softens what the format section above asks for: rows are still
+ * written to an exact width, and the padding is never offered as an allowance to draw inside.
  */
 export function buildPrompt({ description, width, height, previous = null }) {
   const system = [
@@ -170,17 +177,32 @@ export function buildPrompt({ description, width, height, previous = null }) {
 
   const user = [`Design a ${width} by ${height} level.`, '', description.trim()];
 
-  if (previous?.problems?.length > 0) {
+  const problems = previous?.problems ?? [];
+  const pads = previous?.pads ?? [];
+
+  if (problems.length > 0) {
     // The layout is only shown when there was one to show: a reply with no block in it fails before
     // anything is drawn, and quoting an empty block back would teach the wrong lesson.
     if (previous.layout) user.push('', 'You drew this last time and it was rejected:', '', '```', previous.layout, '```');
     user.push(
       '',
       'What was wrong with it:',
-      ...previous.problems.map((problem) => `  - ${problem}`),
+      ...problems.map((problem) => `  - ${problem}`),
       '',
       'Draw it again, fixing that. Keep what worked; the problem is usually the route rather than the',
       'decoration, so be willing to move ground around rather than only moving the things that were stranded.',
+    );
+  }
+
+  if (pads.length > 0) {
+    user.push(
+      '',
+      `${problems.length > 0 ? 'Also, your' : 'Your'} rows did not all come out the length you were asked for last time. These had to be`,
+      'filled in with empty space to be usable:',
+      ...pads.map((pad) => `  - ${pad}`),
+      '',
+      'Empty space is the only thing that can be filled in, so a short row that was meant to end in ground',
+      'ends in a hole instead. Count this time: work each row out as runs that add up before you draw it.',
     );
   }
 
