@@ -13,15 +13,24 @@
  * The other half - that the total does not depend on the order a player collects things in, which is a
  * property of the kill and pickup rules rather than of the level file - needs the game running, and is
  * covered by the browser harness. Both halves exist because they have both been wrong.
+ *
+ * With --reach it also walks each level: every object is checked to see whether a player can actually
+ * get to it, using the same solver the editor refuses a generated level with. A maximum score nobody
+ * can reach is the same bug as a maximum score that is wrong, and the top grade is the one it hides in.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildLevels } from '../src/config/levels.js';
+import { parseLevel } from '../src/editor/format.js';
+import { analyseReachability } from '../src/editor/reachability.mjs';
 import { describeObjects, maxScoreForObjects, objectsFromMapJson } from '../src/state/levelScore.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SHUFFLES = 50;
+const REACH = process.argv.slice(2).includes('--reach');
+const PICKUPS = ['water-drop', 'light-orb', 'nutrient'];
+const ENEMIES = ['spider-mite', 'fungus-gnat', 'root-rot'];
 
 // The index is read straight off disk and put through the same buildLevels() the game uses. Importing
 // LEVELS would give an empty table here, because the browser fills it by fetching that same file.
@@ -49,8 +58,10 @@ const problems = [];
 for (const level of Object.values(LEVELS)) {
   const path = join(root, 'public', level.file);
   let objects;
+  let text;
   try {
-    objects = objectsFromMapJson(JSON.parse(readFileSync(path, 'utf8')));
+    text = readFileSync(path, 'utf8');
+    objects = objectsFromMapJson(JSON.parse(text));
   } catch (error) {
     problems.push(`${level.key}: could not read ${level.file} (${error.message})`);
     continue;
@@ -67,6 +78,8 @@ for (const level of Object.values(LEVELS)) {
     console.log(`  ${name.padEnd(14)} x${String(counts[name]).padStart(2)}   ${line}`);
   }
 
+  if (REACH) walk(level, text, problems);
+
   if (unknown.length > 0) {
     problems.push(`${level.key}: no score defined for ${unknown.join(', ')} - add it to objectValues() in src/state/levelScore.js`);
   }
@@ -79,6 +92,47 @@ for (const level of Object.values(LEVELS)) {
       problems.push(`${level.key}: maximum depends on the order the objects are listed in (${total} vs ${again})`);
       break;
     }
+  }
+}
+
+/**
+ * Walks a level and says what a player can get to.
+ *
+ * Counted by kind rather than listed, because the number is the thing worth reading at a glance; the
+ * ones that cannot be reached are named, since those are what somebody has to go and move.
+ */
+function walk(level, text, into) {
+  let parsed;
+  try {
+    parsed = parseLevel(text);
+  } catch (error) {
+    into.push(`${level.key}: could not read the map for reachability (${error.message})`);
+    return;
+  }
+
+  const started = Date.now();
+  const result = analyseReachability(parsed);
+  if (result.reason) {
+    into.push(`${level.key}: ${result.reason}`);
+    console.log(`  ${'reachable'.padEnd(14)}  not checked: ${result.reason}`);
+    return;
+  }
+
+  const tally = (names) => {
+    const of = result.objects.filter((object) => names.includes(object.name));
+    return `${of.filter((object) => object.reachable).length}/${of.length}`;
+  };
+  const seconds = ((Date.now() - started) / 1000).toFixed(1);
+  console.log(
+    `  ${'reachable'.padEnd(14)}  ${tally(PICKUPS)} pickups, ${tally(ENEMIES)} enemies, `
+      + `goal-jar ${result.goal.reachable ? 'yes' : 'NO'}   (from ${result.start.col},${result.start.row}; ${result.stances} stances, ${seconds}s)`,
+  );
+
+  for (const object of result.stranded) {
+    console.log(`    unreachable: ${object.name} at tile ${Math.floor(object.x / 32)},${Math.floor(object.y / 32)}`);
+  }
+  if (result.stranded.length > 0) {
+    into.push(`${level.key}: ${result.stranded.length} object(s) cannot be reached from player-start, so its maximum score cannot be earned`);
   }
 }
 

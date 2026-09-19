@@ -5,18 +5,21 @@ Two checks, both plain node scripts. There is no test framework and no CI config
 | Command | What it does | Takes |
 | --- | --- | --- |
 | `npm run check-levels` | Reads every level file and checks what it is worth | instant |
-| `npm run smoke` | Drives the real game in a real browser, nine suites | ~100s |
+| `npm run check-levels -- --reach` | Also walks each level: can a player get to all of it? | instant |
+| `npm run smoke` | Drives the real game in a real browser, ten suites | ~215s |
 
 Run `npm run smoke` before committing anything that touches scoring, saving, or a scene.
 
 ## npm run smoke
 
-Nine end-to-end suites. They open the real game in Chrome and read state back out of the running Phaser
+Ten end-to-end suites. Nine open the real game in Chrome and read state back out of the running Phaser
 instance through `window.__growop`, which `main.js` exposes in dev builds only. Nothing is stubbed: when a
-suite says a root rot split, a root rot really split.
+suite says a root rot split, a root rot really split. The tenth, `editor-generate.js`, drives the level
+editor the same way through `window.__editor`, judging layouts through the real parse, check and
+reachability path with the model's reply handed in rather than fetched - so it costs nothing to run.
 
 ```
-npm run smoke                 # all nine, headless
+npm run smoke                 # all ten, headless
 npm run smoke -- --headed     # a visible browser, one suite at a time, for watching a failure
 npm run smoke -- save         # only suites whose filename contains "save"
 npm run smoke -- --jobs 1     # one at a time
@@ -113,3 +116,7 @@ every grade in a level. It also fails on a level worth nothing at all.
 It covers the level-file half of "a level's maximum is always the same figure". The other half, that the
 maximum does not depend on the order a player collects things in, is a property of the kill rules rather
 than of the level file, and lives in `scoring-order.js`.
+
+With `--reach` it also walks every level with the solver in `src/editor/reachability.mjs` and fails if
+anything in one cannot be reached from `player-start`. A maximum score nobody can reach is the same bug
+as a maximum score that is wrong: it is Exotic, at 90% of the level, that quietly becomes impossible.

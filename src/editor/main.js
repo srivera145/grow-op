@@ -1,5 +1,6 @@
 import { autotile } from '../../tools/autotile-core.mjs';
 import { PARALLAX } from '../config/constants.js';
+import { Generate } from './Generate.js';
 import { Grid, History } from './Grid.js';
 import { ObjectLayer } from './Objects.js';
 import { Palette } from './Palette.js';
@@ -21,6 +22,20 @@ const MAX_ZOOM = 4;
 const PARALLAX_ALPHA = 0.16;
 const NAME_PATTERN = /^[a-z0-9-]+$/;
 
+/**
+ * Whether the Vite dev server is the one serving this page.
+ *
+ * `import.meta.env` only exists because Vite puts it there, so this is also the honest answer to "is the
+ * editor actually running?". Opened through any other static server - VS Code's Live Server, python's
+ * http.server, the file system - the modules still load, but /levels is not where the editor thinks it
+ * is and the routes it saves and deletes through do not exist at all. It would come up looking fine and
+ * lose the first level somebody drew, so it says so instead.
+ *
+ * The optional chaining matters: without it, reading .DEV off nothing is an opaque TypeError and a blank
+ * page, which is exactly the wrong way to find this out.
+ */
+const UNDER_VITE = Boolean(import.meta.env?.DEV);
+
 const canvas = document.getElementById('canvas');
 const context = canvas.getContext('2d');
 const nameInput = document.getElementById('name');
@@ -39,6 +54,9 @@ let objectType = 'water-drop';
 let problems = [];
 let gids = null; // autotiled gids, rebuilt whenever the grid changes
 let levelIndex = []; // public/levels/index.json, as loaded; the Level order panel edits this copy
+// The level exactly as it is on disk, so "has this got unsaved work in it?" has an honest answer.
+// null means there is nothing on disk to compare against: a generated draft, which is all unsaved.
+let onDisk = null;
 
 const art = { tiles: null, parallax: [], sheets: new Map() };
 
@@ -521,6 +539,31 @@ const palette = new Palette(document.getElementById('palette'), {
   },
 });
 
+/**
+ * The Generate panel.
+ *
+ * It owns the description, the request and the checks; the only thing it cannot decide is whether a
+ * draft may take the canvas, because that is a question about the level already open. A draft arrives
+ * unsaved and under a level key nothing is registered under, so the Save button cannot be the way
+ * somebody finds out it replaced their work.
+ */
+const generate = new Generate(document.getElementById('generate'), {
+  onAccept: (draft) => {
+    const open = nameInput.value.trim() || 'the open level';
+    if (unsaved() && !window.confirm(`Replace ${open} with the generated draft?
+
+It has changes that have not been saved, and this cannot be undone.`)) {
+      return false;
+    }
+    adopt(draft, { saved: false });
+    const key = freeDraftName();
+    nameInput.value = key;
+    applyMeta(key);
+    say(`Generated draft loaded as "${key}". Nothing has been written yet - Save does that.`, 'warn');
+    return true;
+  },
+});
+
 function say(message, severity = 'ok') {
   savedText.textContent = message;
   savedText.style.color = severity === 'error' ? '#e8443a' : severity === 'warn' ? '#ffd60a' : '#8fae97';
@@ -528,13 +571,26 @@ function say(message, severity = 'ok') {
 
 // ---------------------------------------------------------------- loading and saving
 
-function adopt(loaded) {
+function adopt(loaded, { saved = true } = {}) {
   level = loaded;
   grid = new Grid(loaded.width, loaded.height, loaded.cells);
   objects = new ObjectLayer(loaded.objects, loaded.nextObjectId);
   history.undoStack.length = 0;
   history.redoStack.length = 0;
   changed();
+  onDisk = saved ? currentText() : null;
+}
+
+/** Whether the level on the canvas has anything in it that is not in a file. */
+const unsaved = () => onDisk === null || currentText() !== onDisk;
+
+/** A level key nothing is registered under, so accepting a draft cannot arm a Save over something. */
+function freeDraftName(base = 'draft') {
+  const taken = new Set(levelIndex.map((entry) => entry.key));
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    if (!taken.has(`${base}-${suffix}`)) return `${base}-${suffix}`;
+  }
 }
 
 /** The level list, for the Level order panel and for knowing whether a save needs to register. */
@@ -637,16 +693,18 @@ document.getElementById('save').addEventListener('click', async () => {
     say('A level name may only use a-z, 0-9 and dashes.', 'error');
     return;
   }
+  const written = currentText();
   try {
     const response = await fetch('/api/level', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // `entry` is only used if this key is not in the index yet: saving a level registers a new one
       // and never rewrites an existing entry. Level order is the panel for changing those.
-      body: JSON.stringify({ name, json: currentText(), entry: palette.meta() }),
+      body: JSON.stringify({ name, json: written, entry: palette.meta() }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+    onDisk = written; // what is on disk now, so the next unsaved() answer is about edits made since
     if (body.registered) await loadIndex();
     say(`Saved public/levels/${name}.json${body.registered ? ' and registered it' : ''}`);
   } catch (error) {
@@ -678,7 +736,7 @@ document.getElementById('redo').addEventListener('click', () => history.redo());
  * A handle for the automated editor checks, the same idea as window.__growop in the game. The editor
  * only ever runs under the dev server, but the guard says plainly that none of this is shipped.
  */
-if (import.meta.env.DEV) {
+if (UNDER_VITE) {
   window.__editor = {
     state: () => {
       const last = objects.list[objects.list.length - 1];
@@ -716,6 +774,20 @@ if (import.meta.env.DEV) {
       changed();
     },
     reset: () => adopt(blankLevel(grid.width, grid.height)),
+    unsaved: () => unsaved(),
+    // Judges a layout exactly as a generated one is judged, without spending a request on one. The
+    // verdict is flattened because it crosses into a test runner, where a level object means nothing.
+    offer: (reply, size) => {
+      const verdict = generate.offer(reply, size);
+      return {
+        ok: verdict.ok,
+        problems: verdict.problems.map((problem) => `${problem.severity}: ${problem.message}`),
+        stranded: (verdict.reach?.stranded ?? []).map((object) => `${object.name} at ${Math.floor(object.x / TILE)},${Math.floor(object.y / TILE)}`),
+        objects: verdict.level?.objects.length ?? 0,
+        size: verdict.level ? `${verdict.level.width}x${verdict.level.height}` : null,
+      };
+    },
+    useDraft: () => generate.use(),
     index: () => levelIndex,
     setMeta: (meta) => palette.setMeta(meta),
     saveIndex: (index) => palette.handlers.onSaveIndex(index ?? palette.readIndex()),
@@ -731,13 +803,44 @@ if (import.meta.env.DEV) {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-await loadArt();
-await loadIndex(); // before the level, so its name, label and tileset can be shown
-const wanted = new URLSearchParams(window.location.search).get('level');
-if (wanted) nameInput.value = wanted;
-await loadLevel(nameInput.value.trim());
+if (UNDER_VITE) {
+  await loadArt();
+  await loadIndex(); // before the level, so its name, label and tileset can be shown
+  const wanted = new URLSearchParams(window.location.search).get('level');
+  if (wanted) nameInput.value = wanted;
+  await loadLevel(nameInput.value.trim());
 
-(function frame() {
-  draw();
-  requestAnimationFrame(frame);
-})();
+  (function frame() {
+    draw();
+    requestAnimationFrame(frame);
+  })();
+} else {
+  wrongServer();
+}
+
+/** Says which server this needs, rather than half-working on whichever one opened the page. */
+function wrongServer() {
+  document.body.innerHTML = '';
+  document.body.style.display = 'block';
+  document.body.style.padding = '32px';
+
+  const heading = document.createElement('h1');
+  heading.style.color = '#ffd60a';
+  heading.style.font = '600 18px ui-monospace, monospace';
+  heading.textContent = 'The level editor needs the Vite dev server.';
+
+  const detail = document.createElement('p');
+  detail.style.maxWidth = '60ch';
+  detail.textContent =
+    `This page is being served by something else (${window.location.origin}), which cannot serve the level `
+    + 'files or the routes the editor saves and deletes through. Nothing you do here would be written.';
+
+  const how = document.createElement('pre');
+  how.style.color = '#4cd137';
+  how.textContent = 'npm run editor';
+
+  const link = document.createElement('p');
+  link.innerHTML = 'Then open <a href="http://localhost:5173/editor.html" style="color:#4cd137">http://localhost:5173/editor.html</a>.';
+
+  document.body.append(heading, detail, how, link);
+}

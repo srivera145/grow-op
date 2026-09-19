@@ -98,6 +98,34 @@
       .move:disabled { opacity: 0.3; cursor: default; }
       #save-index { width: 100%; }
 
+      aside textarea {
+        width: 100%;
+        font: inherit;
+        color: var(--text);
+        background: #0d1711;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 4px 6px;
+        resize: vertical;
+      }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button:disabled:hover { background: #1e3123; }
+      .note { margin: 6px 0 0; color: var(--dim); }
+      .note[data-severity='error'] { color: var(--red); }
+      .note[data-severity='warn'] { color: var(--gold); }
+      #generate .size { margin-top: 6px; }
+      #generate .buttons { margin-top: 6px; }
+      #generate-run { width: 100%; margin-top: 6px; }
+      #generate-preview {
+        display: block;
+        width: 100%;
+        height: auto;
+        margin-top: 8px;
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        image-rendering: pixelated;
+      }
+
       .problems { list-style: none; margin: 0; padding: 0; }
       .problems li { padding: 3px 0 3px 14px; text-indent: -14px; }
       .problems li.error { color: var(--red); }
@@ -139,7 +167,10 @@
       <span id="status"></span>
       <span id="saved"></span>
     </header>
-    <aside id="palette"></aside>
+    <aside>
+      <div id="generate"></div>
+      <div id="palette"></div>
+    </aside>
     <main>
       <canvas id="canvas"></canvas>
       <div id="readout"></div>

@@ -75,7 +75,7 @@ if (window.screen.orientation && window.screen.orientation.addEventListener) {
 }
 
 // Dev-only handle for console debugging and automated smoke tests. Stripped from production builds.
-if (import.meta.env.DEV) {
+if (import.meta.env?.DEV) {
   window.__growop = game;
 }
 
@@ -85,7 +85,7 @@ if (import.meta.env.DEV) {
  * for it on the spot, pointing at the file the editor saves to, so a new level is playable before anyone
  * has registered it. import.meta.env.DEV is a literal false in a build, so the whole block is dropped.
  */
-if (import.meta.env.DEV) {
+if (import.meta.env?.DEV) {
   const wanted = new URLSearchParams(window.location.search).get('level');
   if (wanted && /^[a-z0-9-]+$/.test(wanted)) {
     LEVELS[wanted] ??= { key: wanted, name: wanted, label: wanted, file: `levels/${wanted}.json`, tileset: 'tiles-soil', next: wanted };

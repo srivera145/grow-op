@@ -4,8 +4,13 @@
 npm run editor      # opens http://localhost:5173/editor.html
 ```
 
-It is a development tool. It is not built, not deployed, and the route it saves through only exists
+It is a development tool. It is not built, not deployed, and the routes it saves through only exist
 while the dev server is running. `npm run build` produces the game and nothing else.
+
+**It has to be the Vite dev server.** Opened through anything else - VS Code's Live Server, a plain static
+server, the file system - the level files are not where the editor looks for them and the save and delete
+routes do not exist at all, so it would come up looking fine and quietly write nothing. It checks, and
+says so on the page instead.
 
 ## What it edits
 
@@ -60,6 +65,79 @@ block is compiled out and the query does nothing.
 
 **Load** fetches `public/levels/<name>.json`. If there is no such level it starts an empty 120x17 map
 under that name, which is how you begin a new one.
+
+## Generating a level
+
+Describe a level in the **Generate** panel and a model draws one. What comes back is a draft on the
+canvas, never a file: it is not saved, not registered, and not playable until you save it yourself.
+
+```
+ANTHROPIC_API_KEY=sk-ant-...        # in .env, which is gitignored. See .env.example
+ANTHROPIC_MODEL=claude-opus-5       # no default: unset fails, naming this variable
+```
+
+Both are read by the dev server, in `vite.config.js`, and by nothing else. They are deliberately **not**
+`VITE_` prefixed, because that prefix is exactly what would put them in the browser bundle. The key is
+used to make one HTTPS call from the machine running the dev server; it is never sent to the page, never
+logged, and `npm run build` contains no trace of it, no generate route, and no editor at all.
+
+There is no fallback model on purpose. A guessed model is a bill for a reply in the wrong shape, so an
+unset `ANTHROPIC_MODEL` is an error that names the variable. Restart the dev server after editing `.env`.
+
+### What the model is told
+
+The prompt is built from `constants.js` at the moment you press the button, so it is always describing
+the game as it is now. It is given the run speed, the jump speed and gravity, and then the three numbers
+that follow from them:
+
+```
+peak jump height = jump speed^2 / (2 * gravity)   3.67 tiles
+airtime          = 2 * jump speed / gravity       1.02 s
+horizontal reach = run speed * airtime            7.03 tiles
+```
+
+and told to build to **3 tiles of climb and 5 tiles of gap** — under what the physics allow, so a jump is
+something a person can make while also watching an enemy. Retune `JUMP_VELOCITY` and every one of those
+numbers moves on the next request. There is not a second copy of the physics anywhere in the prompt.
+
+### What comes back
+
+One character per tile, one line per row, in a fenced block. Everything written around the block is
+ignored, so a model that explains itself first has done nothing wrong.
+
+| | | | |
+| --- | --- | --- | --- |
+| `#` solid | `P` player-start | `W` water-drop | `M` spider-mite |
+| `.` empty | `J` goal-jar | `L` light-orb | `G` fungus-gnat |
+| | | `N` nutrient | `R` root-rot |
+
+That legend is checked against the game's own object list when the module loads, so an object added to
+the game and not to the legend is an error at startup rather than a type no generated level can contain.
+A letter outside the legend is refused and named; it is never dropped.
+
+The reply is then held to the size that was asked for — a row of the wrong width, or the wrong number of
+rows, is a layout the model lost count in, and the parts of it that are right cannot be told from the
+parts that are not. The refusal names every row that is wrong at once, and those rows are what gets sent
+back with **Regenerate**.
+
+### What gets checked before it loads
+
+In this order, cheapest first:
+
+1. **It parses.** The right size, and nothing outside the legend.
+2. **The editor's own checks,** the same ones in the Checks panel: one player-start, at least one
+   goal-jar, nothing inside a wall, nothing under the map, and a player-start standing on ground.
+3. **It can be played.** The solver walks it (below). Every object has to be reachable, and so does the jar.
+
+**A level that fails any of those is not loaded.** It is shown as a thumbnail with the stranded objects
+ringed in red and listed underneath, and the only things offered are Regenerate and Discard. Regenerate
+sends the layout back with exactly what was wrong with it, and asks for another. Nothing retries on its
+own: one request per press, the button is disabled while one is in flight, and each press is a paid API
+call to the model in `.env`. A 120x17 level takes a model a few minutes to think through.
+
+**Use this level** puts the draft on the canvas as unsaved work and renames the level box to `draft` (or
+`draft-2`, and so on) so the next Save cannot land on top of the level you had open. If what is on the
+canvas has unsaved changes, it asks first. Save is still the only thing that writes a file.
 
 ## The level list
 
@@ -132,8 +210,47 @@ Live, and it never blocks a save — a level part-way through being built is exp
 It judges positions the way GameScene does: an object's position is the middle of its rectangle, and
 where it meets the ground is the bottom of that rectangle, or the bottom of the cell a point sits in.
 
+Reachability is not in this list. It costs a fraction of a second rather than nothing, and half a level
+is unreachable while you are still drawing the other half, so it would be crying wolf all day. It runs
+where a level is claimed to be finished instead: on anything generated, and on demand over every level
+with `npm run check-levels -- --reach`.
+
 `world1-1.json` passes these. It did not before: `fungus-gnat` id 48 sat inside the solid tile at column
 93, row 10, and was moved up into clear air.
+
+## Can it be played?
+
+`src/editor/reachability.mjs` answers one question: starting from `player-start`, can the player get to
+everything in this level? It is a breadth-first flood over the tiles that can be stood on, with real jump
+arcs flown out of each one — integrated in small steps and resolved one axis at a time, the way Arcade
+moves a body — and it reports which objects a body actually overlaps along the way.
+
+It runs on every generated level, and over every level on disk with:
+
+```
+npm run check-levels -- --reach
+```
+
+```
+world1-1  (World 1-1)  maximum 2910
+  reachable       34/34 pickups, 12/12 enemies, goal-jar yes   (from 3,15; 123 stances, 0.2s)
+```
+
+A stranded object fails the run, because a maximum score nobody can reach is the same bug as a maximum
+score that is wrong — and the grade it hides in is Exotic, which needs 90% of the level.
+
+**It is deliberately pessimistic.** The two mistakes it could make do not cost the same: a false
+"unreachable" costs somebody an edit they did not need to make, while a false "reachable" ships a level
+with a jar nobody can touch. So it uses the small body, which is the form the player always has and the
+one that reaches least far up; it flies a fixed spread of take-offs rather than assuming perfect air
+control; it treats enemies as standing still where they were placed, when patrolling can only bring them
+closer; and it ignores the leaf slash, which reaches further than the body does.
+
+What it does not know about: bouncing off an enemy's head, which is a real route, so a level that needs
+one reads as unreachable here. Nothing in the game has moving platforms, so nothing else is missing.
+
+On the physics as they stand it clears gaps up to 6 tiles and climbs of up to 3, which is why the model
+is asked for 5 and 3.
 
 ## Map size
 
@@ -152,7 +269,12 @@ other change.
 | `src/editor/Palette.js` | the left panel: tools, types, size, checks |
 | `src/editor/format.js` | reading and writing Tiled JSON, and where each object type sits in a cell |
 | `src/editor/validate.js` | the checks above |
+| `src/editor/reachability.mjs` | the solver: can a player get to all of it? |
+| `src/editor/Generate.js` | the Generate panel: description, request, verdict, accept or discard |
+| `tools/generate/prompt.mjs` | what the model is told, built from the live constants |
+| `tools/generate/parse.mjs` | the ASCII layout to a grid and a list of objects |
+| `.env.example` | the two variables generating needs, and where they are read |
 | `tools/autotile-core.mjs` | `autotile()` and `serialize()`, shared with the command line |
-| `vite.config.js` | the dev-only save routes, and the build that deliberately excludes the editor |
+| `vite.config.js` | the dev-only save and generate routes, and the build that deliberately excludes the editor |
 | `public/levels/index.json` | the level list, in order |
 | `src/config/levels.js` | turns that list into `LEVELS` and `FIRST_LEVEL`, and fails loudly if it cannot |

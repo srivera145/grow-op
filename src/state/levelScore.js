@@ -62,6 +62,16 @@ export function describeObjects(objects) {
   return { total, byName, unknown };
 }
 
+/**
+ * Every object name the game has a rule for: the scored ones, and the ones deliberately worth nothing.
+ *
+ * This is the list a level may be built out of. Exported so the level generator can refuse a layout
+ * naming something else rather than dropping it quietly, and so that list cannot drift from this one.
+ */
+export function knownObjectNames() {
+  return [...Object.keys(objectValues()), ...UNSCORED];
+}
+
 /** Every point obtainable in a level, from the objects placed in it. */
 export function maxScoreForObjects(objects) {
   return describeObjects(objects).total;

@@ -1,13 +1,20 @@
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
+import { buildPrompt } from './tools/generate/prompt.mjs';
+import { clampSize } from './tools/generate/parse.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const LEVEL_DIR = resolve(root, 'public/levels');
 const INDEX_FILE = join(LEVEL_DIR, 'index.json');
 const NAME_PATTERN = /^[a-z0-9-]+$/;
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
+// A 200x24 layout is about 5k characters, so the layout itself is small. The ceiling is high because a
+// model that thinks before it draws spends that budget on the thinking, and a run that spends three
+// minutes reasoning and then gets cut off mid-layout has cost the money for nothing. The request is
+// streamed, which is what makes a ceiling this high safe to ask for.
+const MAX_TOKENS = 64000;
 
 /**
  * Lets the level editor write to public/levels while the dev server is running.
@@ -127,6 +134,90 @@ function levelSaver() {
 }
 
 /**
+ * Asks a model for a level, while the dev server is running.
+ *
+ * The API key lives on this side of the wire and nowhere else. It is read from .env by Vite's own
+ * loadEnv, which is not the same thing as exposing it: only VITE_ prefixed variables reach the browser,
+ * and this one is never put into `define`, never sent in a response and never written to the log. The
+ * editor posts a description here and gets an ASCII layout back; it never sees a key or a model call.
+ *
+ * `apply: 'serve'` keeps the whole route out of a build, the same way the level saver is kept out. A
+ * built game has no generate route, and editor.html is not built at all, so it has no generate UI either.
+ */
+function levelGenerator(env) {
+  let inFlight = false; // one at a time: these cost money and a queue of them is nobody's intention
+
+  return {
+    name: 'growop-level-generator',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use('/api/generate-level', async (request, response, next) => {
+        if (request.method !== 'POST') return next();
+        const reply = replier(response);
+
+        if (inFlight) {
+          return reply(429, { error: 'a level is already being generated. Wait for that one to come back.' });
+        }
+
+        // Named, never printed. The model is not guessed at: a wrong model is a bill for a reply that
+        // does not fit, and a default here would be the wrong one the moment the good one changes.
+        const apiKey = env.ANTHROPIC_API_KEY;
+        const model = env.ANTHROPIC_MODEL;
+        if (!apiKey) {
+          return reply(500, { error: 'ANTHROPIC_API_KEY is not set. Put it in .env (see .env.example) and restart the dev server.' });
+        }
+        if (!model) {
+          return reply(500, { error: 'ANTHROPIC_MODEL is not set. Put the model name in .env (see .env.example) and restart the dev server.' });
+        }
+
+        inFlight = true;
+        const startedAt = Date.now();
+        try {
+          const { description, width, height, previous } = JSON.parse(await readBody(request));
+          if (typeof description !== 'string' || description.trim().length < 3) {
+            return reply(400, { error: 'describe the level you want in a sentence or two' });
+          }
+
+          const size = clampSize({ width, height });
+          const prompt = buildPrompt({ description, ...size, previous });
+
+          const { default: Anthropic } = await import('@anthropic-ai/sdk').catch(() => {
+            throw new Error('@anthropic-ai/sdk is not installed. Run: npm install');
+          });
+
+          // Neither thinking nor effort is set: which of those a model takes depends on the model, and
+          // this one comes out of .env. Every current model does the right thing by default.
+          const client = new Anthropic({ apiKey });
+          const message = await client.messages
+            .stream({ model, max_tokens: MAX_TOKENS, system: prompt.system, messages: [{ role: 'user', content: prompt.user }] })
+            .finalMessage();
+
+          if (message.stop_reason === 'refusal') {
+            return reply(502, { error: `the model declined to answer (${message.stop_details?.category ?? 'no reason given'})` });
+          }
+          if (message.stop_reason === 'max_tokens') {
+            return reply(502, {
+              error: `the reply was cut off at ${MAX_TOKENS} tokens (${message.usage.output_tokens} written), so the layout is incomplete`,
+            });
+          }
+
+          const text = message.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
+          const usage = { input: message.usage.input_tokens, output: message.usage.output_tokens };
+          const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+          server.config.logger.info(`  level generated  ${model}  ${size.width}x${size.height}  ${usage.input} in / ${usage.output} out tokens  ${seconds}s`);
+          reply(200, { reply: text, model, usage, size, seconds: Number(seconds) });
+        } catch (error) {
+          // Whatever went wrong, only the message goes back. SDK errors carry the request, not the key.
+          reply(error.status ?? error.statusCode ?? 502, { error: error.message });
+        } finally {
+          inFlight = false;
+        }
+      });
+    },
+  };
+}
+
+/**
  * Removes a level: its index entry first, then its file.
  *
  * That order is the point. A dangling entry - one naming a file that is not there - is the failure this
@@ -213,12 +304,15 @@ function readBody(request) {
   });
 }
 
-export default defineConfig({
-  plugins: [levelSaver()],
+// A function, so Vite hands over the mode and .env can be read for it. loadEnv with an empty prefix
+// reads every variable, not just the VITE_ ones - which is the point: these must not be VITE_ ones.
+// Nothing here is passed to `define`, so none of it can reach the browser.
+export default defineConfig(({ mode }) => ({
+  plugins: [levelSaver(), levelGenerator(loadEnv(mode, root, ''))],
   build: {
     // Only the game is built. editor.html is deliberately not an entry: it is a development tool, it
     // talks to a dev-server route that does not exist in production, and shipping it would put a level
     // editor on the live site. Vite serves it at /editor.html in dev without being asked.
     rollupOptions: { input: resolve(root, 'index.html') },
   },
-});
+}));
