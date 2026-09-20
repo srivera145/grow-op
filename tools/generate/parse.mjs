@@ -17,6 +17,13 @@ import { knownObjectNames } from '../../src/state/levelScore.js';
  * What it does fill in is what it can prove it is filling in correctly: the trailing empty cells of a
  * row that came up a character or two short, and the leading empty rows of a layout that stopped short
  * of the sky. See PAD_TOLERANCE below and the pads that parseLayout hands back.
+ *
+ * There are two ways in, and which one is taken is read off the reply rather than set by a flag. A reply
+ * whose rows carry an index prefix - see INDEX_SEPARATOR below - is read as numbered, and then a row that
+ * went missing is named by what arrived rather than guessed at from what did not: the empty row goes back
+ * at the index the numbering skipped, and every other row keeps the place it was written in. A reply
+ * whose rows carry no prefix is read exactly as it always was, first-row-empty rule and all, because
+ * every reply already on disk in .level-raw is one of those and re-parsing them has to stay free.
  */
 
 /** One letter per object type. The letters are the whole vocabulary the model is given. */
@@ -33,6 +40,44 @@ export const LETTERS = {
 
 export const SOLID = '#';
 export const EMPTY = '.';
+
+/**
+ * The row prefix, and why there is one.
+ *
+ * A row that goes missing used to be a thing inferred from what did not arrive: sixteen rows came back
+ * where seventeen were asked for, and nothing in the text said which one was gone. Asking the model to
+ * write each row's index in front of it turns that into a thing stated - the gap is visible in what
+ * arrives, so the empty row goes back where it belongs instead of at the top.
+ *
+ * The separator has to be a character the layout can never contain, or a prefix could not be told apart
+ * from content. "|" is not in the legend and cannot become part of it: the legend is checked against the
+ * game's object list above, and the list is names, not punctuation.
+ *
+ * The index is zero-padded to the width of the largest one so the prefixes line up in a column, which is
+ * what makes a skipped number visible to the model writing it as well as to this. A reply that writes 9
+ * where it was asked for 09 is still read: the number is unambiguous either way, and refusing a level
+ * over a leading zero would cost a whole generation for nothing.
+ */
+export const INDEX_SEPARATOR = '|';
+
+/** How wide the index field is for a level this tall - the width of the largest index, which is height-1. */
+export const indexWidth = (height) => String(Math.max(0, height - 1)).length;
+
+/** Rows with their index in front of them: what the prompt asks for, and what it shows an example of. */
+export function numberRows(rows, height = rows.length) {
+  const places = indexWidth(height);
+  return rows.map((row, index) => `${String(index).padStart(places, '0')}${INDEX_SEPARATOR}${row}`);
+}
+
+const PREFIX = new RegExp(`^([0-9]+)[${INDEX_SEPARATOR}]`);
+
+// One character, outside the layout alphabet, and one a character class takes literally. Checked
+// rather than assumed, because swapping the separator for something the layout can contain is a one-line
+// change that would make a prefix indistinguishable from a row.
+const RESERVED = [SOLID, EMPTY, ...Object.keys(LETTERS), ...'0123456789', ']', '^', '-'];
+if (INDEX_SEPARATOR.length !== 1 || RESERVED.includes(INDEX_SEPARATOR)) {
+  throw new Error(`INDEX_SEPARATOR has to be one character outside the layout alphabet, not "${INDEX_SEPARATOR}"`);
+}
 
 // The legend has to name every object the game knows about and nothing else. A type added to the game
 // and not to the legend would be a thing no generated level could ever contain; a letter here for a
@@ -119,6 +164,144 @@ function listRows(rows, describe) {
 const plural = (count, one, many) => (count === 1 ? one : many);
 
 /**
+ * "the 4th line", for the rows that have no index to be named by.
+ *
+ * An unnumbered row cannot be called row 4 - that is exactly what is missing from it - and calling it
+ * line 4 would sit a 1-based count next to the 0-based indices in the same message. An ordinal is read
+ * the one way whatever base the reader has in mind.
+ */
+function ordinal(position) {
+  const suffix = position % 100 >= 11 && position % 100 <= 13 ? 'th' : { 1: 'st', 2: 'nd', 3: 'rd' }[position % 10] ?? 'th';
+  return `${position}${suffix}`;
+}
+
+/**
+ * The indices off the front of the rows, or null if this reply is not a numbered one.
+ *
+ * Which path a reply takes is decided here and nowhere else, and it is decided by looking at the rows: a
+ * flag would be a second thing to keep in step with what the model actually wrote, and the replies
+ * already on disk predate any flag there might have been.
+ *
+ * Everything this refuses is something that could have been patched over and is not, on purpose. A
+ * half-numbered reply could have had the gaps counted out from its neighbours; indices that repeat or
+ * run backwards could have been sorted. Both of those are the same guess the numbering exists to remove,
+ * made with worse information. The trade is deliberate and it is the whole point: a misnumbered reply is
+ * refused loudly, where a dropped row used to be accepted quietly and silently wrong.
+ */
+function readNumbering(rows, width, height) {
+  const marks = rows.map((row) => PREFIX.exec(row));
+  if (marks.every((mark) => mark === null)) return null;
+
+  const bare = marks.map((mark, line) => (mark ? null : line)).filter((line) => line !== null);
+  if (bare.length > 0) {
+    throw new LayoutError(
+      `some rows are numbered and ${plural(bare.length, 'one is', `${bare.length} are`)} not: the `
+        + `${listRows(bare, (line) => ordinal(line + 1))} ${plural(bare.length, 'line', 'lines')} of the block `
+        + `${plural(bare.length, 'carries', 'carry')} no index. A reply is numbered or it is not - the two are `
+        + 'not reconciled here, because working out which index an unnumbered row was meant to carry is exactly '
+        + `the guess the numbering is for. Write it again with every row as its ${indexWidth(height)}-digit `
+        + `index, then "${INDEX_SEPARATOR}", then the ${width}-character row`,
+      { row: bare[0] },
+    );
+  }
+
+  const indices = marks.map((mark) => Number(mark[1]));
+  const bodies = rows.map((row, line) => row.slice(marks[line][0].length));
+
+  // Every wrong index at once, for the same reason every wrong row is named at once further down: the
+  // message is what the next attempt is taught from, and one attempt per bad index is one too many.
+  const counts = new Map();
+  for (const index of indices) counts.set(index, (counts.get(index) ?? 0) + 1);
+  const outOfRange = [...new Set(indices.filter((index) => index >= height))];
+  const duplicated = [...counts].filter(([, count]) => count > 1).map(([index]) => index);
+  const backwards = indices
+    .map((index, line) => (line > 0 && index < indices[line - 1] ? { from: indices[line - 1], to: index } : null))
+    .filter(Boolean);
+
+  if (outOfRange.length > 0 || duplicated.length > 0 || backwards.length > 0) {
+    const reasons = [];
+    if (outOfRange.length > 0) {
+      reasons.push(
+        `${listRows(outOfRange, (index) => `${index}`)} ${plural(outOfRange.length, 'is', 'are')} outside `
+          + `0 to ${height - 1}, which are the only rows a ${height}-row level has`,
+      );
+    }
+    if (duplicated.length > 0) {
+      reasons.push(
+        `${listRows(duplicated, (index) => `${index}`)} ${plural(duplicated.length, 'appears', 'appear')} more `
+          + 'than once, so there is no telling which of them is that row',
+      );
+    }
+    if (backwards.length > 0) {
+      reasons.push(
+        `the numbering goes backwards at ${listRows(backwards, (step) => `${step.from} then ${step.to}`)}`
+          + ' - rows out of order are rows in an order nobody meant',
+      );
+    }
+    const firstBad = indices.findIndex(
+      (index, line) => index >= height || counts.get(index) > 1 || (line > 0 && index < indices[line - 1]),
+    );
+    throw new LayoutError(
+      `the rows are numbered, but the numbering is wrong: ${reasons.join('; and ')}. This is not sorted out `
+        + 'here - a level rebuilt from indices that contradict each other is a level nobody drew. Write it '
+        + `again, each row numbered once, in order, 0 to ${height - 1}`,
+      { row: Math.max(0, firstBad) },
+    );
+  }
+
+  return { indices, bodies };
+}
+
+/**
+ * A numbered reply laid back out at full height, with an empty row at every index the numbering skipped.
+ *
+ * This is the whole of what numbering buys. A row is put back where its own neighbours say the gap is,
+ * so nothing below it moves: the level that comes out is the level that was drawn, minus one row of
+ * content and plus one row of air, at a stated place. Compare the unnumbered case below, where the only
+ * provable place to put a row is the top and every row after it moves down a tile.
+ *
+ * The same PAD_TOLERANCE bounds it, and for the same reason. Knowing exactly which eight rows are gone
+ * does not make eight missing rows a transcription slip - it makes them eight rows of level that were
+ * never written, and an empty row is not what was in any of them.
+ */
+function fillNumbered({ indices, bodies }, width, height) {
+  const present = new Set(indices);
+  const missing = [];
+  for (let index = 0; index < height; index += 1) if (!present.has(index)) missing.push(index);
+
+  const was = indices.length;
+  const limit = Math.floor(height * PAD_TOLERANCE);
+  if (missing.length > limit) {
+    throw new LayoutError(
+      `the layout has ${was} of the ${height} rows that were asked for, and the ${missing.length} missing `
+        + `${plural(missing.length, 'index', 'indices')} (${listRows(missing, (index) => `${index}`)}) `
+        + `${plural(missing.length, 'is', 'are')} more than the ${limit} that could be filled in (10% of `
+        + `${height}). The numbering says exactly which rows are gone, which is not the same as being able `
+        + 'to put them back: this is a layout missing whole rows of level, not one that lost a line',
+      { row: missing[0] },
+    );
+  }
+
+  const rows = new Array(height);
+  indices.forEach((index, line) => { rows[index] = bodies[line]; });
+  for (const index of missing) rows[index] = EMPTY.repeat(width);
+
+  return {
+    rows,
+    pads: missing.map((index) => ({
+      where: 'height',
+      row: index,
+      added: 1,
+      was,
+      want: height,
+      message: `The layout was ${was} rows of ${height} and none of them was numbered ${index}, so an empty row `
+        + `was put back at index ${index} - where the numbering says the gap is, rather than at the top. Every `
+        + 'other row kept the index it was written with.',
+    })),
+  };
+}
+
+/**
  * The layout as a level the editor can adopt: a solid/empty grid and a list of placed objects, plus
  * every repair that had to be made to get there.
  *
@@ -130,12 +313,19 @@ const plural = (count, one, many) => (count === 1 ? one : many);
  * reachability solver exactly as a hand-drawn one does, so a pad that broke the level is caught by the
  * same thing that catches a badly drawn one. Nothing downstream is loosened for it.
  *
- * A missing row is a harder case and is treated as one. The rest of a short row is still there, so the
- * pad can only be the empty cells at its end; a missing row takes a whole line of the level with it and
- * leaves nothing behind saying which line it was. Putting one back at the top is only right when the
- * layout opens with sky - the model was drawing empty air and stopped - so that is the only case where
- * it is done. Every other shortfall is refused, because a level shifted down a row passes the checks,
- * passes the solver, and is wrong by a tile everywhere.
+ * A missing row is a harder case and is treated as one, in whichever of the two ways the reply allows.
+ * If the rows are numbered, the reply says which index is gone and the empty row goes there, leaving
+ * every other row exactly where it was written; see fillNumbered above. If they are not, all there is to
+ * go on is that a whole line of the level is missing and nothing says which. Putting one back at the top
+ * is only right when the layout opens with sky - the model was drawing empty air and stopped - so that
+ * is the only case where it is done, and every other shortfall is refused, because a level shifted down
+ * a row passes the checks, passes the solver, and is wrong by a tile everywhere.
+ *
+ * That rule has a hole in it that numbering is what closes: an unnumbered layout which opens with sky
+ * *and* lost a row from its middle is padded at the top and shifted, and nothing in the text tells it
+ * apart from one that stopped short. It is left open for unnumbered replies rather than closed by
+ * refusing them, because closing it would refuse the honest case too and would make every reply on disk
+ * unreadable. A numbered reply is not subject to it at all.
  *
  * What is never done is silent. Every pad comes back in `pads` and is shown in the draft notes with the
  * row and how much, because a level that was quietly repaired is a level that is subtly not the one on
@@ -155,7 +345,7 @@ const plural = (count, one, many) => (count === 1 ? one : many);
 export function parseLayout(text, size) {
   const { width, height } = clampSize(size);
 
-  const rows = String(text ?? '')
+  let rows = String(text ?? '')
     .split('\n')
     .map((line) => line.replace(/[\r\t ]+$/, '')); // trailing whitespace is invisible; nothing else is trimmed
   while (rows.length > 0 && rows[0] === '') rows.shift();
@@ -163,6 +353,18 @@ export function parseLayout(text, size) {
 
   const pads = [];
   if (rows.length === 0) throw new LayoutError('the fenced block is empty, so there is no layout in it');
+
+  // Which of the two paths this reply takes, read off the rows rather than told. A numbered reply is put
+  // back to full height here, with the prefixes gone, so the two height checks below cannot fire on one -
+  // they are the unnumbered path's rules, and the first-row-empty rule inside them with them. The width
+  // rule is unchanged and applies to both, because by this point a numbered row is just a row: the prefix
+  // is off before anything measures it.
+  const numbering = readNumbering(rows, width, height);
+  if (numbering) {
+    const filled = fillNumbered(numbering, width, height);
+    rows = filled.rows;
+    pads.push(...filled.pads);
+  }
 
   // Too many rows is refused for the same reason an over-long row is: dropping one drops whatever was
   // drawn in it, and which one was surplus cannot be guessed at from here.

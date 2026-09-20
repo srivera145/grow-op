@@ -1,5 +1,6 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { numberRows } from '../tools/generate/parse.mjs';
 import { BASE_URL, check, is, launch, report, watchConsole } from './harness.js';
 
 /**
@@ -50,6 +51,35 @@ function ceilingLevel(gap) {
   rows[0] = `${'.'.repeat(6)}${'#'.repeat(8)}${'.'.repeat(WIDTH - 14)}`;
   return rows.join('\n');
 }
+
+/**
+ * A level that opens with sky and has content in the middle of it, which is the shape the height rule
+ * could never get right on its own.
+ *
+ * Row 7 is a platform and row 6 is a drop above it, so both a row of ground and a row of objects sit
+ * where losing one is invisible from the outside: the layout still opens with an empty row, so the
+ * unnumbered path pads the top and shifts the whole level down a tile, and the result passes the
+ * editor's checks and the solver exactly as the real one does. It is the counterexample numbering
+ * exists to answer, and it is used below from both paths so the difference between them is a check
+ * rather than a claim.
+ */
+function layeredLevel(gap) {
+  const rows = gapLevel(gap).split('\n');
+  const put = (row, col, character) => { rows[row] = rows[row].slice(0, col) + character + rows[row].slice(col + 1); };
+  rows[7] = `${'.'.repeat(18)}${'#'.repeat(5)}${'.'.repeat(WIDTH - 23)}`;
+  put(6, 20, 'W');
+  return rows.join('\n');
+}
+
+/** The same layout with one index missing from it, as a model that dropped that line would send it. */
+const numbered = (layout, dropped = []) => numberRows(layout.split('\n'), HEIGHT)
+  .filter((row, index) => !dropped.includes(index))
+  .join('\n');
+
+/** What the level would be if that row had arrived empty: the repair, written out by hand. */
+const blanked = (layout, rows) => layout.split('\n')
+  .map((row, index) => (rows.includes(index) ? '.'.repeat(WIDTH) : row))
+  .join('\n');
 
 const fenced = (layout) => `Here is the level.\n\n\`\`\`\n${layout}\n\`\`\`\n`;
 const size = { width: WIDTH, height: HEIGHT };
@@ -299,6 +329,178 @@ check(
   !refusedTall.ok && refusedTall.problems.some((problem) => problem.includes(`${HEIGHT + 1} rows tall`)),
   refusedTall.problems.join(' | '),
 );
+
+// ---------------------------------------------------------------- rows that say which row they are
+
+/**
+ * Numbering turns a lost row from something inferred into something stated.
+ *
+ * Everything above this line is the parser working out what it can prove from geometry alone, and the
+ * limit of that is the pair of checks at the end of the last section: a layout that opens with sky is
+ * padded at the top, and one that does not is refused. Neither is right for a layout that opens with
+ * sky and lost a row from its middle. That one pads at the top, shifts every row down a tile, and
+ * passes everything - which is the worst outcome there is, because nothing ever says so.
+ *
+ * With an index in front of each row the gap is in the reply rather than in the difference between what
+ * arrived and what was asked for. The first half below is that working; the second half is the price,
+ * which is that numbering can itself be wrong, and wrong numbering is refused rather than reconciled.
+ * A detectable error in place of a silent one is the whole trade.
+ */
+
+const numberedWhole = await offer(numbered(gapLevel(4)));
+is(results, 'a numbered reply parses to the same level the unnumbered one did', numberedWhole.places, crossable.places);
+is(results, 'with the same ground', numberedWhole.solid, crossable.solid);
+is(results, 'and the size that was asked for, the prefixes not counted in the width', numberedWhole.size, `${WIDTH}x${HEIGHT}`);
+is(results, 'a numbered reply that lost nothing is not padded', numberedWhole.pads, []);
+
+// A row of ground lost from the middle. The empty row goes to index 7 and nothing else moves: every
+// object is still at the pixel it was drawn at, and the grid is the one you get by blanking row 7 by
+// hand. Against the whole level rather than against itself, which is the only comparison worth making.
+const layeredWhole = await offer(layeredLevel(4));
+check(results, 'the layered control level passes everything', layeredWhole.ok, layeredWhole.problems.join(' | '));
+
+const lostPlatform = await offer(numbered(layeredLevel(4), [7]));
+check(results, 'a numbered reply missing a middle index is repaired, not refused', lostPlatform.ok, lostPlatform.problems.join(' | '));
+check(
+  results,
+  'the pad names the index and says the row went back there rather than at the top',
+  lostPlatform.pads.some((pad) => pad.includes('numbered 7') && pad.includes('put back at index 7') && pad.includes('rather than at the top')),
+  lostPlatform.pads.join(' | '),
+);
+is(results, 'every object is still exactly where the whole level had it', lostPlatform.places, layeredWhole.places);
+const platformBlanked = await offer(blanked(layeredLevel(4), [7]));
+is(results, 'and the ground is that level with row 7 blanked, tile for tile', lostPlatform.solid, platformBlanked.solid);
+is(results, 'which is the whole level less the five tiles that row held', lostPlatform.solid, layeredWhole.solid - 5);
+
+// A row that had an object in it. The object goes with the row - a pad only ever adds empty space, and
+// it cannot put back a drop the reply did not send - but nothing else is touched, and the ground either
+// side of the gap is untouched too. Losing a row is still losing it; it is no longer moving the rest.
+const lostDrop = await offer(numbered(layeredLevel(4), [6]));
+check(results, 'a numbered reply that lost a row with an object in it is still read', lostDrop.ok, lostDrop.problems.join(' | '));
+const dropBlanked = await offer(blanked(layeredLevel(4), [6]));
+is(results, 'and is exactly the level with row 6 blanked where it stood', lostDrop.places, dropBlanked.places);
+is(results, 'with the object gone rather than moved', lostDrop.places.length, layeredWhole.places.length - 1);
+is(results, 'and the ground untouched', lostDrop.solid, layeredWhole.solid);
+
+/**
+ * The counterexample, rebuilt from both ends.
+ *
+ * Padding the top moves the rows *above* the gap, which is what makes this so hard to see: lose row 7
+ * and rows 0 to 6 come back at 1 to 7, so the drop drawn on row 6 is read as being on row 7 while the
+ * floor and the jar below it sit exactly where they belong. Nothing looks wrong. Both replies are
+ * accepted, both pass the solver, and they are different levels.
+ *
+ * Same layout, same lost row, two paths. The numbered one has every object at the pixel it was drawn
+ * at; the unnumbered one does not, and still cannot, which is what the doc now says plainly.
+ */
+const shifted = await offer(layeredLevel(4).split('\n').filter((row, index) => index !== 7).join('\n'));
+check(results, 'the counterexample unnumbered is accepted, exactly as it always was', shifted.ok, shifted.problems.join(' | '));
+check(results, 'and still padded at the top', shifted.pads.some((pad) => pad.includes('at the top')), shifted.pads.join(' | '));
+check(
+  results,
+  'so the rows above the gap come back a tile low, with the right count of everything',
+  shifted.places.length === layeredWhole.places.length && shifted.places.join() !== layeredWhole.places.join(),
+  `drawn ${layeredWhole.places.join(' ')} | unnumbered ${shifted.places.join(' ')}`,
+);
+is(results, 'while the same loss, numbered, leaves every object where it was drawn', lostPlatform.places, layeredWhole.places);
+check(
+  results,
+  'which is the difference the numbering buys, on one layout that used to have no way to tell',
+  lostPlatform.places.join() !== shifted.places.join(),
+  `numbered ${lostPlatform.places.join(' ')} | unnumbered ${shifted.places.join(' ')}`,
+);
+
+// ---------------------------------------------------------------- numbering that is itself wrong
+
+/**
+ * The price of the trade. None of these is reconciled, and each says which index it is about.
+ *
+ * Sorting out indices that contradict each other would put the guess straight back, with worse
+ * information than the geometry had. A misnumbered reply is refused loudly; a dropped row used to be
+ * taken quietly and be wrong. That is the swap being made, and these checks are what hold it.
+ */
+
+const reindex = (layout, line, index) => numbered(layout).split('\n')
+  .map((row, at) => (at === line ? `${index}|${row.slice(row.indexOf('|') + 1)}` : row))
+  .join('\n');
+
+const duplicated = await offer(reindex(gapLevel(4), 7, '06'));
+check(
+  results,
+  'a duplicated index is refused, naming it',
+  !duplicated.ok && duplicated.problems.some((problem) => problem.includes('6 appears more than once')),
+  duplicated.problems.join(' | '),
+);
+
+const swapped = numbered(gapLevel(4)).split('\n');
+[swapped[4], swapped[5]] = [swapped[5], swapped[4]];
+const backwards = await offer(swapped.join('\n'));
+check(
+  results,
+  'indices out of order are refused, naming the step that goes backwards',
+  !backwards.ok && backwards.problems.some((problem) => problem.includes('goes backwards at 5 then 4')),
+  backwards.problems.join(' | '),
+);
+
+const outside = await offer(reindex(gapLevel(4), 3, '99'));
+check(
+  results,
+  'an index outside the level is refused, naming it and the range',
+  !outside.ok && outside.problems.some((problem) => problem.includes(`99 is outside 0 to ${HEIGHT - 1}`)),
+  outside.problems.join(' | '),
+);
+
+const partial = numbered(gapLevel(4)).split('\n');
+partial[3] = partial[3].slice(3);
+partial[9] = partial[9].slice(3);
+const halfNumbered = await offer(partial.join('\n'));
+check(
+  results,
+  'a reply where only some rows are numbered is refused, naming the lines that are not',
+  !halfNumbered.ok && halfNumbered.problems.some((problem) => problem.includes('4th, 10th lines of the block carry no index')),
+  halfNumbered.problems.join(' | '),
+);
+is(results, 'and nothing is padded on a reply whose numbering was refused', halfNumbered.pads, []);
+
+// The same tolerance, and it is not softened by knowing exactly which rows are gone. Two out of twelve
+// is past 10%, so however well numbered it is, this is a different level rather than a dropped line.
+const twoGone = await offer(numbered(gapLevel(4), [3, 8]));
+check(
+  results,
+  'more missing indices than the tolerance allows is refused, however well numbered',
+  !twoGone.ok && twoGone.problems.some((problem) => problem.includes(`2 missing indices (3, 8)`) && problem.includes(`more than the 1 that could be filled in (10% of ${HEIGHT})`)),
+  twoGone.problems.join(' | '),
+);
+is(results, 'and nothing is padded on that either', twoGone.pads, []);
+
+// ---------------------------------------------------------------- and the rest is unchanged
+
+// The width rule is the width rule on both paths: the prefix comes off before anything is measured, so
+// a numbered row that is one character short is the same slip it always was, padded and reported.
+const numberedShort = numbered(gapLevel(4)).split('\n');
+numberedShort[3] = numberedShort[3].slice(0, -1);
+const paddedNumbered = await offer(numberedShort.join('\n'));
+check(
+  results,
+  'a numbered row one character short is padded on the right, the prefix not counted',
+  paddedNumbered.ok && paddedNumbered.pads.some((pad) => pad.includes(`Row 3 came in 29 characters, 1 short of ${WIDTH}`)),
+  paddedNumbered.pads.join(' | '),
+);
+
+const numberedStranded = await offer(numbered(gapLevel(7)));
+check(
+  results,
+  'a numbered level that cannot be played is refused like any other',
+  !numberedStranded.ok && numberedStranded.problems.some((problem) => problem.includes('goal-jar cannot be reached')),
+  numberedStranded.problems.join(' | '),
+);
+
+// The padding is asked for so the numbers line up in a column. A model that writes 9 where it was asked
+// for 09 has still said which row it is, and a whole generation is not thrown away over a leading zero.
+const lean = gapLevel(4).split('\n').map((row, index) => `${index}|${row}`).join('\n');
+const leanRead = await offer(lean);
+check(results, 'an index written without its leading zero is still read', leanRead.ok, leanRead.problems.join(' | '));
+is(results, 'as the same level', leanRead.places, crossable.places);
 
 // ---------------------------------------------------------------- re-parsing a saved reply is free
 

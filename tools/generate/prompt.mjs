@@ -1,6 +1,6 @@
 import { ENEMIES, GRAVITY_Y, PICKUPS, PLAYER, TILE_SIZE } from '../../src/config/constants.js';
 import { analyseReachability, jumpEnvelope } from '../../src/editor/reachability.mjs';
-import { EMPTY, LETTERS, SOLID, parseLayout } from './parse.mjs';
+import { EMPTY, INDEX_SEPARATOR, LETTERS, SOLID, indexWidth, numberRows, parseLayout } from './parse.mjs';
 
 /**
  * What the model is told before it draws a level.
@@ -67,9 +67,28 @@ function cast() {
 
 /** The format contract. Anything outside the fenced block is thrown away, so this says so plainly. */
 function format(width, height) {
+  const places = indexWidth(height);
+  const first = '0'.padStart(places, '0');
+  const last = String(height - 1).padStart(places, '0');
   return [
-    `Write the level as ${height} lines of exactly ${width} characters each, inside one \`\`\` fenced block.`,
-    'One character per tile. The legend:',
+    `Write the level as ${height} lines inside one \`\`\` fenced block.`,
+    '',
+    `Every line is its row number, then "${INDEX_SEPARATOR}", then exactly ${width} characters of level:`,
+    '',
+    `  ${first}${INDEX_SEPARATOR}<${width} characters>     the top row`,
+    `  ${last}${INDEX_SEPARATOR}<${width} characters>     the bottom row`,
+    '',
+    `Row numbers start at 0, go up by one every line, and are written with ${places} `
+      + `${places === 1 ? 'digit' : 'digits'} - ${first} through ${last} - so they line up in a`,
+    'column and a skipped number is something you can see. Number every line or none of them; half and',
+    'half is rejected.',
+    `A number that repeats, goes backwards, or is outside ${first} to ${last} is rejected too, saying which.`,
+    '',
+    'This is worth the few extra characters. If a line does go missing, the numbers say which row it was,',
+    'and an empty row is put back exactly there - so the rest of your level stays where you drew it. Without',
+    'them a dropped row shifts everything below it down by one and the level is quietly wrong.',
+    '',
+    `The ${width} characters after the "${INDEX_SEPARATOR}" are one character per tile. The legend:`,
     '',
     legend(),
     '',
@@ -86,13 +105,17 @@ function format(width, height) {
     `Getting every row to exactly ${width} characters is the part that goes wrong, and one short row throws`,
     'the whole level away. So do not write a row by eye. Work each one out first as runs that add up to',
     `${width} - "7 dots, 5 hashes, 12 dots, ..." - and check the arithmetic before you draw it. Do that`,
-    'working above the block, where it is ignored. Then render the runs.',
+    `working above the block, where it is ignored. Then render the runs. The "${INDEX_SEPARATOR}" is not one of`,
+    `the ${width}: count the level, not the prefix.`,
     '',
     `Here is a whole reply at ${EXAMPLE_WIDTH} by ${EXAMPLE.length}, which is far smaller than what you are being asked for.`,
     'It is here for its shape, not for its size or its contents:',
+    `Being ${EXAMPLE.length} rows, its numbers run ${EXAMPLE_FIRST} to ${EXAMPLE_LAST} in `
+      + `${EXAMPLE_PLACES} ${EXAMPLE_PLACES === 1 ? 'digit' : 'digits'}; yours run ${first} to ${last} in `
+      + `${places}. The width of the number follows the height of the level.`,
     '',
     '```',
-    ...EXAMPLE,
+    ...numberRows(EXAMPLE),
     '```',
   ].join('\n');
 }
@@ -122,10 +145,23 @@ if (EXAMPLE.some((row) => row.length !== EXAMPLE_WIDTH)) {
   throw new Error('the worked example in tools/generate/prompt.mjs has rows of different widths');
 }
 
+// The example is written without its numbers and numbered on the way out, so the one piece of code that
+// decides what a prefix looks like is the one in parse.mjs that reads them back. The example is shorter
+// than any real request, so its indices are narrower than a real reply's - which is the rule working, and
+// is said out loud beside it rather than left to be noticed.
+const EXAMPLE_PLACES = indexWidth(EXAMPLE.length);
+const EXAMPLE_FIRST = '0'.padStart(EXAMPLE_PLACES, '0');
+const EXAMPLE_LAST = String(EXAMPLE.length - 1).padStart(EXAMPLE_PLACES, '0');
+
 // It also has to be a level that can actually be finished, checked by the same solver that judges what
 // comes back. An example nobody could play is an example of the wrong thing, and it is the one part of
 // the prompt that would never get played.
-if (!analyseReachability(parseLayout(EXAMPLE.join('\n'), { width: EXAMPLE_WIDTH, height: EXAMPLE.length }).level).ok) {
+//
+// It is parsed in the numbered form, which is the form the prompt actually shows, so the example is put
+// through the same path a reply drawn from it will take. An example the parser would refuse is the worst
+// possible thing to show a model, and this is the cheapest place to find out.
+const EXAMPLE_REPLY = numberRows(EXAMPLE).join('\n');
+if (!analyseReachability(parseLayout(EXAMPLE_REPLY, { width: EXAMPLE_WIDTH, height: EXAMPLE.length }).level).ok) {
   throw new Error('the worked example in tools/generate/prompt.mjs is not a level that can be finished');
 }
 
@@ -196,17 +232,21 @@ export function buildPrompt({ description, width, height, previous = null }) {
       'up stranded. The problem is usually the route rather than the decoration.',
       '',
       'If what was wrong was the count - the number of rows, or the length of them - then the design was',
-      `fine and the transcription was not. Write the level out again and count as you go: ${height} lines,`,
-      `${width} characters each, worked out as runs before you draw them. A line that goes missing takes a`,
-      'whole row of the level with it, and nothing in what arrives says which row it was, so it cannot be',
-      'put back for you.',
+      `fine and the transcription was not. Write the level out again and count as you go: ${height} lines `
+        + `numbered ${'0'.padStart(indexWidth(height), '0')} to `
+        + `${String(height - 1).padStart(indexWidth(height), '0')},`,
+      `${width} characters after the "${INDEX_SEPARATOR}" on each, worked out as runs before you draw them.`,
+      '',
+      'Number every line. That is what lets a line you drop be put back where it belongs instead of losing',
+      'you the whole level - but only an empty row goes back, never whatever you had drawn in it, so a row',
+      'you meant to matter is still a row to get right the first time.',
     );
   }
 
   if (pads.length > 0) {
     user.push(
       '',
-      `${problems.length > 0 ? 'Also, your' : 'Your'} rows did not all come out the length you were asked for last time. These had to be`,
+      `${problems.length > 0 ? 'Also, your' : 'Your'} rows did not all come out as asked last time. These had to be`,
       'filled in with empty space to be usable:',
       ...pads.map((pad) => `  - ${pad}`),
       '',

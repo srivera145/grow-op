@@ -103,8 +103,27 @@ numbers moves on the next request. There is not a second copy of the physics any
 
 ### What comes back
 
-One character per tile, one line per row, in a fenced block. Everything written around the block is
-ignored, so a model that explains itself first has done nothing wrong.
+One line per row, in a fenced block. Everything written around the block is ignored, so a model that
+explains itself first has done nothing wrong. Each line is its **row number**, then `|`, then one
+character per tile:
+
+```
+00|....................................W.......................
+01|.........................#####..............................
+...
+16|############################################################
+```
+
+(shown narrower than a real one, which is 120 tiles across.)
+
+The number is zero-based and zero-padded to the width of the largest one, so a 17-row level is numbered
+`00` to `16` and the prefixes line up in a column — which is what makes a skipped number visible to the
+model writing it as well as to the parser reading it. `|` is the separator because it is the one thing
+the layout can never contain: the legend below is object names, and names are not punctuation. The
+prefix is stripped before anything measures a row, so the width is the level and never the number.
+
+Numbering is the whole of what makes a dropped row survivable rather than silently wrong — see
+[A missing row is not a missing character](#a-missing-row-is-not-a-missing-character).
 
 | | | | |
 | --- | --- | --- | --- |
@@ -121,15 +140,36 @@ seventeen times over is the thing a model is least reliable at, and a 120x17 gen
 away in full because row 14 came back 119 characters — a paid call and several minutes of thinking, gone
 over one character. So:
 
+Widths, whichever way the reply is written — the prefix is off before anything is counted:
+
 | What came back | What happens |
 | --- | --- |
 | a row short by up to 10% of the width | **padded on the right with empty space**, and reported |
 | a row short by more than that | refused, naming the row and both lengths |
 | a row longer than the width | refused, naming the row and the excess — never trimmed |
+
+Rows, when the reply is numbered:
+
+| What came back | What happens |
+| --- | --- |
+| an index missing, and no more of them than 10% of the height | **an empty row put back at that index**, and reported |
+| more missing indices than that | refused, naming every one of them |
+| an index repeated, out of order, or outside 0 to height-1 | refused, naming the offending indices |
+| some lines numbered and some not | refused, naming the lines that are not |
+
+Rows, when it is not — every reply written before numbering existed, and every one still on disk:
+
+| What came back | What happens |
+| --- | --- |
 | fewer rows, and the first row is all empty | **empty rows added at the top**, and reported |
 | fewer rows, and the first row has anything in it | refused, naming both heights |
 | fewer rows by more than 10% of the height | refused, naming both heights |
 | more rows than asked for | refused, naming both heights |
+
+Which of the two it is, is read off the rows themselves rather than set by a flag: a reply whose lines
+carry index prefixes is numbered, one whose lines do not is not, and a reply that is half and half is
+refused rather than guessed at. That is what keeps every reply already in `.level-raw` re-parsing exactly
+as it did — which is the entire point of that directory.
 
 **Padding cannot make an impossible level look possible.** A pad only ever adds empty space: it cannot
 add ground, so it cannot bridge a pit the model left, and it cannot add an object, so it cannot put back
@@ -143,29 +183,53 @@ They look like the same mistake and they are not, so they are not treated the sa
 
 The rest of a short row is still there. Row 14 arriving at 119 of 120 means the 119 characters are the
 ones that were drawn and the pad can only be the empty cells at the end — the level is unchanged. A
-layout arriving at 16 rows of 17 says nothing of the kind: **a whole line of the level is gone and
-nothing in what came back says which line it was.** Put a row back at the top of a layout that dropped
-one from its middle and every row below it moves down one tile. That level has the right number of
-everything, passes the editor's checks, passes the solver, and is the wrong level by 32 pixels
-everywhere — which is worse than a refusal, because nothing will ever tell you.
+layout arriving at 16 rows of 17 says nothing of the kind: **a whole line of the level is gone**, and
+whether anything says which line it was is exactly what the numbering decides.
 
-So the top is padded in the one case where it can be shown to be the right place: **the layout opens
-with an entirely empty row.** That is a model that was still drawing sky when it stopped, and sky is
-what gets added back. Anything else is refused and says why. The same 10% that bounds a short row bounds
-a short layout on top of that, because eight rows missing is a different level however it begins.
+**When the rows are numbered, it does.** The reply says which index never arrived, so the empty row goes
+back at that index and every other row keeps the one it was written with. Nothing moves. The level that
+comes out is the level that was drawn, minus one row of content, plus one row of air, at a stated place
+— and the pad says so, by index, in the draft notes.
 
-**One case this does not catch,** and it is worth knowing: a layout that opens with sky *and* lost a row
-from the middle is still padded at the top, and still shifts. Nothing in the returned text distinguishes
-it from a layout that stopped short. Closing it properly would mean asking the model to number its rows,
-so a gap is visible in what arrives rather than inferred from what does not.
+**When they are not, it does not,** and then the only provable repair is at the top. Put a row back at
+the top and everything *above* the gap moves down a tile while everything below it stays, which is what
+makes the result so hard to spot: the floor and the jar sit exactly where they belong and a platform
+six rows up does not. That level has the right number of everything, passes the editor's checks, passes
+the solver, and is the wrong level by 32 pixels in its upper half — which is worse than a refusal,
+because nothing will ever tell you.
+
+So for an unnumbered reply the top is padded in the one case where it can be shown to be the right
+place: **the layout opens with an entirely empty row.** That is a model that was still drawing sky when
+it stopped, and sky is what gets added back. Anything else is refused and says why.
+
+**That rule still has a hole in it, and it still applies to every unnumbered reply:** a layout that
+opens with sky *and* lost a row from the middle is padded at the top and shifts, and nothing in the
+returned text tells it apart from one that stopped short. It is not closed by refusing those replies,
+because that would refuse the honest case with it and make every reply already on disk unreadable. It
+is closed by numbering, and a numbered reply is not subject to it at all. `tests/editor-generate.js`
+holds both halves of that as a pair: the same layout, the same lost row, sent both ways, one of them a
+tile out.
+
+The same 10% bounds both paths, on top of everything above. Eight rows missing is a different level
+however it begins — and knowing exactly which eight is not the same as being able to put them back.
 
 **And no pad is silent.** Every one is listed in the draft notes with the row and how much:
 
 ```
 + Row 14 came in 119 characters, 1 short of 120, and was padded on the right with 1 empty cell.
++ The layout was 16 rows of 17 and none of them was numbered 9, so an empty row was put back at index 9
+  - where the numbering says the gap is, rather than at the top. Every other row kept the index it was
+  written with.
 + The layout was 16 rows, 1 short of 17, and its first row was empty - so it stopped short of the sky,
   and 1 empty row was added at the top: row 0 is air the model did not draw.
 ```
+
+**And numbering that is wrong is refused, not reconciled.** An index that repeats, runs backwards or
+falls outside the level is named and sent back; so is a reply where only some lines carry one. Counting
+the gaps out from the neighbours of an unnumbered line, or sorting indices that contradict each other,
+would put back exactly the guess the numbering was added to remove — with worse information than the
+geometry had. That is the trade, stated plainly: **a misnumbering is a detectable error, and a dropped
+row in an unnumbered reply is not.** Detectable-and-refused beats silent-and-wrong.
 
 Those lines also go back with **Regenerate**, so a model that is consistently short is told so while
 there is still a session left to correct it in. A level that was quietly repaired is a level that is
