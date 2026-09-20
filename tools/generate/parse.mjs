@@ -10,11 +10,13 @@ import { knownObjectNames } from '../../src/state/levelScore.js';
  * person draws the level by hand. There is no second format to keep in step.
  *
  * Nothing here is forgiving about content. A character that is not in the legend, a row with more in it
- * than was asked for, a layout taller than the request - all refused, saying exactly what was wrong,
- * because the alternative is a level that quietly lost the thing the description asked for.
+ * than was asked for, a layout taller than the request, a layout that lost a row from somewhere in the
+ * middle - all refused, saying exactly what was wrong, because the alternative is a level that quietly
+ * lost the thing the description asked for.
  *
- * The one thing it is forgiving about is a row that came up short, which is transcription rather than
- * design: see PAD_TOLERANCE below and the pads that parseLayout hands back.
+ * What it does fill in is what it can prove it is filling in correctly: the trailing empty cells of a
+ * row that came up a character or two short, and the leading empty rows of a layout that stopped short
+ * of the sky. See PAD_TOLERANCE below and the pads that parseLayout hands back.
  */
 
 /** One letter per object type. The letters are the whole vocabulary the model is given. */
@@ -94,13 +96,17 @@ export function extractLayout(reply) {
 }
 
 /**
- * How much of a row may be missing before it stops being a dropped character.
+ * How much of a layout may be missing before it stops being a slip and starts being a different level.
  *
  * Counting to 120 seventeen times over is the thing a model is least reliable at, and a row that came
  * back one character short used to throw the whole generation away - a paid call, minutes of thinking,
  * and sixteen rows that were perfectly good, discarded over a character. A shortfall inside this much
  * of the width is read as a transcription slip and padded. Beyond it the model did not lose a
  * character, it drew a different row, and no amount of empty space turns that into the level asked for.
+ *
+ * The same fraction bounds a missing row, for the same reason and with a second condition on top of it:
+ * see the height checks in parseLayout. One row out of seventeen is a line stopped short. Eight is a
+ * different level, whatever the rows that did arrive look like.
  */
 export const PAD_TOLERANCE = 0.1;
 
@@ -122,9 +128,14 @@ const plural = (count, one, many) => (count === 1 ? one : many);
  * floor that was meant to run to the edge - and that makes the level harder, or unfinishable, never
  * easier. Padding fails closed. The padded grid then goes through the editor's own checks and the
  * reachability solver exactly as a hand-drawn one does, so a pad that broke the level is caught by the
- * same thing that catches a badly drawn one. Nothing downstream is loosened for it. Missing rows are
- * added at the top for the same reason: the top of a map is where its empty space lives, so air there
- * moves the floor down without moving anything relative to anything else.
+ * same thing that catches a badly drawn one. Nothing downstream is loosened for it.
+ *
+ * A missing row is a harder case and is treated as one. The rest of a short row is still there, so the
+ * pad can only be the empty cells at its end; a missing row takes a whole line of the level with it and
+ * leaves nothing behind saying which line it was. Putting one back at the top is only right when the
+ * layout opens with sky - the model was drawing empty air and stopped - so that is the only case where
+ * it is done. Every other shortfall is refused, because a level shifted down a row passes the checks,
+ * passes the solver, and is wrong by a tile everywhere.
  *
  * What is never done is silent. Every pad comes back in `pads` and is shown in the draft notes with the
  * row and how much, because a level that was quietly repaired is a level that is subtly not the one on
@@ -166,6 +177,37 @@ export function parseLayout(text, size) {
   if (rows.length < height) {
     const added = height - rows.length;
     const was = rows.length;
+    const limit = Math.floor(height * PAD_TOLERANCE);
+
+    // Same tolerance as a row, and the same argument: one row missing out of seventeen is a model that
+    // stopped a line early, eight is a model that drew a different level.
+    if (added > limit) {
+      throw new LayoutError(
+        `the layout is ${was} rows tall, but ${height} were asked for. ${added} missing `
+          + `${plural(added, 'row is', 'rows are')} more than the ${limit} that could be filled in (10% of ${height}), `
+          + 'so this is a layout missing whole rows of level rather than one that stopped short of the sky',
+        { row: 0 },
+      );
+    }
+
+    // The proof that the rows to add are the ones that went missing. A row that came up short can be
+    // padded on the right because the rest of it is still there; a layout that came up a row short has
+    // no such guarantee - a whole row of content is gone and nothing in what came back says which. The
+    // one case where the top is demonstrably the right place is a layout that opens with sky, because
+    // then the model was still drawing empty air when it stopped, and empty air is what gets added.
+    // Anything else is refused: a level shifted down a row passes every geometry check there is, and is
+    // the wrong level by 32 pixels everywhere.
+    if (![...rows[0]].every((cell) => cell === EMPTY)) {
+      throw new LayoutError(
+        `the layout is ${was} rows tall, but ${height} were asked for, and its first row is not empty. Rows are only `
+          + 'put back at the top of a layout that opens with sky, because that is the one case where the missing '
+          + `${plural(added, 'row', 'rows')} can be shown to belong there. This one lost ${plural(added, 'a row', 'rows')} `
+          + `somewhere that cannot be worked out from here, and padding the top would move every row down ${added} - `
+          + 'the level would pass every check and still be the wrong level',
+        { row: 0 },
+      );
+    }
+
     rows.unshift(...Array.from({ length: added }, () => EMPTY.repeat(width)));
     pads.push({
       where: 'height',
@@ -173,8 +215,9 @@ export function parseLayout(text, size) {
       added,
       was,
       want: height,
-      message: `The layout was ${was} rows, ${added} short of ${height}, so ${added} empty ${plural(added, 'row was', 'rows were')} `
-        + `added at the top: ${plural(added, 'row 0 is', `rows 0-${added - 1} are`)} air the model did not draw.`,
+      message: `The layout was ${was} rows, ${added} short of ${height}, and its first row was empty - so it stopped `
+        + `short of the sky, and ${added} empty ${plural(added, 'row was', 'rows were')} added at the top: `
+        + `${plural(added, 'row 0 is', `rows 0-${added - 1} are`)} air the model did not draw.`,
     });
   }
 

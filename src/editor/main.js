@@ -754,6 +754,10 @@ function flattenVerdict(verdict) {
     pads: (verdict.pads ?? []).map((pad) => pad.message),
     stranded: (verdict.reach?.stranded ?? []).map((object) => `${object.name} at ${Math.floor(object.x / TILE)},${Math.floor(object.y / TILE)}`),
     objects: verdict.level?.objects.length ?? 0,
+    // Where each one ended up, not just how many. A layout that lost a row and had one put back in the
+    // wrong place has the right count of everything and every one of them a tile too low, so a count is
+    // exactly the thing that would not notice.
+    places: verdict.level?.objects.map((object) => `${object.name}@${object.x},${object.y}`) ?? [],
     solid: verdict.level ? verdict.level.cells.reduce((total, cell) => total + cell, 0) : 0,
     size: verdict.level ? `${verdict.level.width}x${verdict.level.height}` : null,
   };

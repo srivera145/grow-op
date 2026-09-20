@@ -37,6 +37,20 @@ function gapLevel(gap) {
   return rows.map((row) => row.join('')).join('\n');
 }
 
+/**
+ * The same level with a slab of ceiling in its top row.
+ *
+ * Every other fixture here opens with sky, which is the one shape a lost row can be recovered from. This
+ * one deliberately does not: it is the layout where padding the top would move the whole level down a
+ * tile, so it is the layout the height rule has to refuse. It is a real level otherwise - the ceiling is
+ * nine rows above the floor and blocks nothing - so it can be offered whole as the control.
+ */
+function ceilingLevel(gap) {
+  const rows = gapLevel(gap).split('\n');
+  rows[0] = `${'.'.repeat(6)}${'#'.repeat(8)}${'.'.repeat(WIDTH - 14)}`;
+  return rows.join('\n');
+}
+
 const fenced = (layout) => `Here is the level.\n\n\`\`\`\n${layout}\n\`\`\`\n`;
 const size = { width: WIDTH, height: HEIGHT };
 
@@ -203,16 +217,79 @@ check(
 
 // ---------------------------------------------------------------- rows, rather than characters
 
-const missingRow = gapLevel(4).split('\n').slice(1); // the top row, which was empty air
-const grown = await offer(missingRow.join('\n'));
+/**
+ * A missing row is not a missing character, and it is not treated like one.
+ *
+ * The rest of a short row is still there, so padding it on the right can only restore the empty cells
+ * it lost. A layout that came back a row short has no such guarantee: a whole line of the level is gone
+ * and nothing in what arrived says which line it was. Put a row back at the top of a layout that lost
+ * one from its middle and every row below moves down a tile - and that level passes the editor's checks,
+ * passes the solver, and is wrong everywhere. So the top is only padded when the layout opens with sky,
+ * which is the one case where the model can be shown to have stopped short rather than skipped a line.
+ *
+ * The checks below are in pairs on purpose: the benign case has to still work, and the shifting case has
+ * to be refused. A rule that only ever refused would pass the second half on its own.
+ */
+
+const missingSky = gapLevel(4).split('\n').slice(1); // the top row, which was empty air
+const grown = await offer(missingSky.join('\n'));
 check(
   results,
-  'a missing row is added at the top, where a map keeps its empty space',
+  'a layout that stopped short of the sky has the row put back at the top',
   grown.ok && grown.pads.some((pad) => pad.includes(`1 short of ${HEIGHT}`) && pad.includes('at the top')),
   grown.pads.join(' | '),
 );
-is(results, 'and the level comes out with the ground it arrived with', grown.solid, crossable.solid);
-is(results, 'and the objects it arrived with', grown.objects, crossable.objects);
+check(
+  results,
+  'and the pad says what made the top the right place for it',
+  grown.pads.some((pad) => pad.includes('its first row was empty')),
+  grown.pads.join(' | '),
+);
+is(results, 'the padded level has the ground the whole one had', grown.solid, crossable.solid);
+is(results, 'and every object in the place the whole one had it', grown.places, crossable.places);
+
+// The case the old check could not see. A layout whose first row has something in it may have lost that
+// row from anywhere, so there is no top to pad: the level below would come back a tile lower than it was
+// drawn, with the right number of everything and every one of them in the wrong place.
+const ceilingWhole = await offer(ceilingLevel(4));
+check(results, 'the control level, with a ceiling in its top row, passes everything', ceilingWhole.ok, ceilingWhole.problems.join(' | '));
+
+const lostFloor = ceilingLevel(4).split('\n').filter((row, index) => index !== HEIGHT - 2);
+const refusedShift = await offer(lostFloor.join('\n'));
+check(
+  results,
+  'a layout that lost a row from its middle is refused rather than shifted',
+  !refusedShift.ok && refusedShift.problems.some((problem) => problem.includes(`${HEIGHT - 1} rows tall, but ${HEIGHT} were asked for`)),
+  refusedShift.problems.join(' | '),
+);
+check(
+  results,
+  'and the refusal says why the top cannot be padded',
+  refusedShift.problems.some((problem) => problem.includes('first row is not empty') && problem.includes('move every row down 1')),
+  refusedShift.problems.join(' | '),
+);
+is(results, 'nothing was padded on a layout that lost a row', refusedShift.pads, []);
+
+const lostSky = ceilingLevel(4).split('\n').filter((row, index) => index !== 5);
+const refusedSkyLoss = await offer(lostSky.join('\n'));
+check(
+  results,
+  'and the same when the row it lost was empty, because that cannot be told apart from the other',
+  !refusedSkyLoss.ok && refusedSkyLoss.problems.some((problem) => problem.includes('first row is not empty')),
+  refusedSkyLoss.problems.join(' | '),
+);
+
+// Opening with sky is not on its own enough. A layout many rows short is a different level however it
+// starts, and the same 10% that bounds a short row bounds a short layout.
+const badlyShortMap = gapLevel(4).split('\n').slice(8);
+const refusedByHeight = await offer(badlyShortMap.join('\n'));
+check(
+  results,
+  'a layout eight rows short is refused on the tolerance, sky or no sky',
+  !refusedByHeight.ok && refusedByHeight.problems.some((problem) => problem.includes(`8 missing rows are more than the 1 that could be filled in (10% of ${HEIGHT})`)),
+  refusedByHeight.problems.join(' | '),
+);
+is(results, 'and nothing was padded', refusedByHeight.pads, []);
 
 const tallMap = [...gapLevel(4).split('\n'), '.'.repeat(WIDTH)];
 const refusedTall = await offer(tallMap.join('\n'));

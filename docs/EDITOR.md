@@ -126,7 +126,9 @@ over one character. So:
 | a row short by up to 10% of the width | **padded on the right with empty space**, and reported |
 | a row short by more than that | refused, naming the row and both lengths |
 | a row longer than the width | refused, naming the row and the excess — never trimmed |
-| fewer rows than asked for | **empty rows added at the top**, and reported |
+| fewer rows, and the first row is all empty | **empty rows added at the top**, and reported |
+| fewer rows, and the first row has anything in it | refused, naming both heights |
+| fewer rows by more than 10% of the height | refused, naming both heights |
 | more rows than asked for | refused, naming both heights |
 
 **Padding cannot make an impossible level look possible.** A pad only ever adds empty space: it cannot
@@ -135,10 +137,34 @@ a jar the model forgot. What it *can* do is leave a hole where a floor was meant
 it fails in the safe direction, and the reachability solver catches it exactly as it catches a badly
 drawn one. Nothing below is loosened for a padded level.
 
+### A missing row is not a missing character
+
+They look like the same mistake and they are not, so they are not treated the same way.
+
+The rest of a short row is still there. Row 14 arriving at 119 of 120 means the 119 characters are the
+ones that were drawn and the pad can only be the empty cells at the end — the level is unchanged. A
+layout arriving at 16 rows of 17 says nothing of the kind: **a whole line of the level is gone and
+nothing in what came back says which line it was.** Put a row back at the top of a layout that dropped
+one from its middle and every row below it moves down one tile. That level has the right number of
+everything, passes the editor's checks, passes the solver, and is the wrong level by 32 pixels
+everywhere — which is worse than a refusal, because nothing will ever tell you.
+
+So the top is padded in the one case where it can be shown to be the right place: **the layout opens
+with an entirely empty row.** That is a model that was still drawing sky when it stopped, and sky is
+what gets added back. Anything else is refused and says why. The same 10% that bounds a short row bounds
+a short layout on top of that, because eight rows missing is a different level however it begins.
+
+**One case this does not catch,** and it is worth knowing: a layout that opens with sky *and* lost a row
+from the middle is still padded at the top, and still shifts. Nothing in the returned text distinguishes
+it from a layout that stopped short. Closing it properly would mean asking the model to number its rows,
+so a gap is visible in what arrives rather than inferred from what does not.
+
 **And no pad is silent.** Every one is listed in the draft notes with the row and how much:
 
 ```
 + Row 14 came in 119 characters, 1 short of 120, and was padded on the right with 1 empty cell.
++ The layout was 16 rows, 1 short of 17, and its first row was empty - so it stopped short of the sky,
+  and 1 empty row was added at the top: row 0 is air the model did not draw.
 ```
 
 Those lines also go back with **Regenerate**, so a model that is consistently short is told so while

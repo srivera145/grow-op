@@ -189,8 +189,17 @@ export function buildPrompt({ description, width, height, previous = null }) {
       'What was wrong with it:',
       ...problems.map((problem) => `  - ${problem}`),
       '',
-      'Draw it again, fixing that. Keep what worked; the problem is usually the route rather than the',
-      'decoration, so be willing to move ground around rather than only moving the things that were stranded.',
+      'Draw it again, fixing that.',
+      '',
+      'If what was wrong was the shape of the level - something stranded, nowhere to land, no way through -',
+      'keep what worked and be willing to move ground around, rather than only moving the thing that ended',
+      'up stranded. The problem is usually the route rather than the decoration.',
+      '',
+      'If what was wrong was the count - the number of rows, or the length of them - then the design was',
+      `fine and the transcription was not. Write the level out again and count as you go: ${height} lines,`,
+      `${width} characters each, worked out as runs before you draw them. A line that goes missing takes a`,
+      'whole row of the level with it, and nothing in what arrives says which row it was, so it cannot be',
+      'put back for you.',
     );
   }
 
