@@ -212,28 +212,40 @@ function levelGenerator(env) {
             .stream({ model, max_tokens: MAX_TOKENS, system: prompt.system, messages: [{ role: 'user', content: prompt.user }] })
             .finalMessage();
 
-          if (message.stop_reason === 'refusal') {
-            return reply(502, { error: `the model declined to answer (${message.stop_details?.category ?? 'no reason given'})` });
-          }
-          if (message.stop_reason === 'max_tokens') {
-            return reply(502, {
-              error: `the reply was cut off at ${MAX_TOKENS} tokens (${message.usage.output_tokens} written), so the layout is incomplete`,
-            });
-          }
-
           const text = message.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
           const usage = { input: message.usage.input_tokens, output: message.usage.output_tokens };
           const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+          const category = message.stop_details?.category ?? null;
 
           // Written before the reply is judged, and before it is even known whether it can be read.
           // That is the point: the generation worth keeping is the one that is about to fail. And a
           // failure to write it is not allowed to become a failure to answer - a full disk must not be
           // the thing that loses a generation, which is the whole complaint this keep exists to answer.
-          const raw = await keepRaw({ description, size, previous, model, usage, seconds: Number(seconds), stop: message.stop_reason, reply: text })
+          //
+          // It is written before the stop reason is looked at, too, and that is the same argument taken
+          // one step further than it used to be. A refusal and a cut-off are paid calls that never reach
+          // the parser, and they used to return here having kept nothing at all - so the two failures you
+          // would most want the request and the reply for were the two that left no trace of either. What
+          // lands on disk after one of those is not a layout and re-parsing it will say so; it is the
+          // record of what was asked, what came back, and how it ended, which is what you debug from.
+          const raw = await keepRaw({ description, size, previous, model, usage, seconds: Number(seconds), stop: message.stop_reason, category, reply: text })
             .catch((error) => {
               log(`could not write this reply to .level-raw (${error.message}) - the draft is all there is of it`);
               return null;
             });
+          const kept = raw ? ` What was asked and what came back are in .level-raw/${raw}.` : ' It could not be written to .level-raw, so nothing was kept of it.';
+
+          if (message.stop_reason === 'refusal') {
+            log(`level refused  ${model}  ${category ?? 'no reason given'}  ${usage.input} in / ${usage.output} out tokens  ${seconds}s${raw ? `  -> .level-raw/${raw}` : ''}`);
+            return reply(502, { error: `the model declined to answer (${category ?? 'no reason given'}).${kept}` });
+          }
+          if (message.stop_reason === 'max_tokens') {
+            log(`level cut off  ${model}  ${usage.output} of ${MAX_TOKENS} tokens  ${seconds}s${raw ? `  -> .level-raw/${raw}` : ''}`);
+            return reply(502, {
+              error: `the reply was cut off at ${MAX_TOKENS} tokens (${usage.output} written), so the layout is incomplete.${kept}`,
+            });
+          }
+
           log(`level generated  ${model}  ${size.width}x${size.height}  ${usage.input} in / ${usage.output} out tokens  ${seconds}s${raw ? `  -> .level-raw/${raw}` : ''}`);
           reply(200, { reply: text, model, usage, size, seconds: Number(seconds), raw });
         } catch (error) {
@@ -500,6 +512,10 @@ async function listRaws() {
         size: saved.size ? `${saved.size.width}x${saved.size.height}` : '',
         tokens: saved.usage?.output ?? null,
         seconds: saved.seconds ?? null,
+        // How it ended, so a refusal or a cut-off is labelled as one in the list rather than looking
+        // like a level that will re-parse and then failing with a complaint about a missing ``` block.
+        stop: saved.stop ?? null,
+        category: saved.category ?? null,
       };
     }),
   );

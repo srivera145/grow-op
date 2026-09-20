@@ -237,7 +237,12 @@ export class Generate {
       for (const file of files) {
         const option = document.createElement('option');
         option.value = file.name;
-        const about = [file.size, file.tokens ? `${file.tokens} out` : '', file.description].filter(Boolean).join(', ');
+        // A reply that never got as far as a layout says so here. It is still listed and still
+        // re-parsable - that is what says what is the matter with it - but it does not pretend.
+        const ended = file.stop && file.stop !== 'end_turn'
+          ? `${file.stop}${file.category ? `: ${file.category}` : ''}`
+          : '';
+        const about = [file.size, ended, file.tokens ? `${file.tokens} out` : '', file.description].filter(Boolean).join(', ');
         option.textContent = about ? `${file.name} - ${about}` : file.name;
         this.raws.append(option);
       }

@@ -812,6 +812,9 @@ if (UNDER_VITE) {
     // The same judgement, on a reply already on disk. The route behind it makes no API call, which is
     // the thing worth being able to check: a refused generation is free to try again.
     reparse: async (raw) => flattenVerdict(await generate.reparse(raw)),
+    // The saved-replies list, rebuilt. A call that was refused is kept and listed like any other, and
+    // what is worth checking is that it is labelled as a refusal rather than looking like a level.
+    refreshRaws: () => generate.refreshRaws(),
     useDraft: () => generate.use(),
     // The Art panel's audit, judged without generating anything: the packed result and its audit are
     // handed in the same shape a route answers with. Flattened, because it crosses into a test runner.

@@ -268,6 +268,18 @@ Every reply is written to **`.level-raw/`** — gitignored, named from the descr
 before anything is done with it, along with the request that produced it. It is written *before* the reply
 is judged, which is the point: the generation worth keeping is the one that is about to fail.
 
+That includes the calls that never produce a layout at all. A refusal (`stop_reason: refusal`, with the
+category the API gives) and a reply cut off at the token cap are both paid calls that return before the
+parser ever runs, and they used to leave nothing behind — so the two failures you would most want the
+request and the reply for were the two that kept neither. They are kept now, listed with how they ended:
+
+```
+suite-... - 120x17, refusal: cyber, 40 out, a flooded basement grow
+```
+
+Re-parsing one says there is no layout in it, which is the honest answer. What it is for is the other
+half: what was asked, what came back, and how it ended.
+
 So a generation that was refused is never a generation that has to be bought again. Pick it in **Saved
 replies** and press **Re-parse the selected one**. That route has no API key and makes no call — it reads
 the file off the disk and hands back what is already in it — and the reply then goes through the identical

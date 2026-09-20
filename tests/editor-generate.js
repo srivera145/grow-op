@@ -547,6 +547,56 @@ is(results, 'a re-parsed reply gives the same draft as the reply itself did', re
 check(results, 'the panel says plainly that it cost nothing', (await status()).includes('no API call, nothing spent'), await status());
 check(results, 'a re-parsed draft can be accepted like any other', await canAccept());
 
+/**
+ * A call that never got as far as a layout is still a call that was paid for.
+ *
+ * A refusal and a cut-off both return before the parser ever sees anything, and they used to return
+ * without writing to .level-raw at all - so the two failures you would most want the request and the
+ * reply for were the two that kept neither, and a refused generation left nothing on disk to look at.
+ * Now the record is written before the stop reason is looked at. It is not a layout and re-parsing it
+ * says so, which is the honest outcome: what it is for is saying what was asked and how it ended.
+ *
+ * The fixture is written here rather than generated, for the same reason as the one above: no API call,
+ * no key, and a model name that does not exist.
+ */
+const REFUSED = 'suite-refused-reply-202609190001.json';
+await writeFile(
+  join(RAW_DIR, REFUSED),
+  `${JSON.stringify({
+    at: '2026-09-19T00:01:00.000Z',
+    description: 'a refusal fixture, not a real generation',
+    size: { width: WIDTH, height: HEIGHT },
+    previous: null,
+    model: 'no-model-was-called',
+    usage: { input: 1200, output: 40 },
+    seconds: 2.5,
+    stop: 'refusal',
+    category: 'cyber',
+    reply: '',
+  }, null, 2)}\n`,
+);
+
+const withRefusal = await get('/api/level-raw');
+const refusedFile = withRefusal.body.files?.find((file) => file.name === REFUSED);
+check(results, 'a call that was refused is kept like any other', Boolean(refusedFile), JSON.stringify(withRefusal.body.files?.slice(0, 2) ?? withRefusal.body));
+is(results, 'with how it ended', refusedFile?.stop, 'refusal');
+is(results, 'and why', refusedFile?.category, 'cyber');
+
+await page.evaluate(() => window.__editor.refreshRaws());
+const labelled = await page.evaluate((name) => [...document.querySelectorAll('#generate-raws option')]
+  .filter((option) => option.value === name).map((option) => option.textContent)[0], REFUSED);
+check(results, 'and is labelled as a refusal in the list rather than looking like a level', (labelled ?? '').includes('refusal: cyber'), labelled);
+
+const rereadRefusal = await page.evaluate((raw) => window.__editor.reparse(raw), REFUSED);
+check(
+  results,
+  're-parsing one says plainly there is no layout in it, rather than pretending',
+  !rereadRefusal.ok && rereadRefusal.problems.some((problem) => problem.includes('``` block')),
+  rereadRefusal.problems.join(' | '),
+);
+
+await rm(join(RAW_DIR, REFUSED), { force: true });
+
 const climbing = await post('/api/reparse-level', { raw: '../.env' });
 is(results, 'a name that is not a file in .level-raw is refused', climbing.status, 400);
 const absent = await post('/api/reparse-level', { raw: 'no-such-reply-202601010000.json' });
