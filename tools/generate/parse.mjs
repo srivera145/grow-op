@@ -14,9 +14,11 @@ import { knownObjectNames } from '../../src/state/levelScore.js';
  * middle - all refused, saying exactly what was wrong, because the alternative is a level that quietly
  * lost the thing the description asked for.
  *
- * What it does fill in is what it can prove it is filling in correctly: the trailing empty cells of a
- * row that came up a character or two short, and the leading empty rows of a layout that stopped short
- * of the sky. See PAD_TOLERANCE below and the pads that parseLayout hands back.
+ * What it does repair is only ever what it can prove: the trailing empty cells of a row that came up a
+ * character or two short, the trailing empty cells of one that came up a character or two long, and the
+ * leading empty rows of a layout that stopped short of the sky. Every one of those moves empty air into
+ * or out of columns the level does not have, and none of them can touch a tile that was drawn. See
+ * PAD_TOLERANCE below and the pads that parseLayout hands back.
  *
  * There are two ways in, and which one is taken is read off the reply rather than set by a flag. A reply
  * whose rows carry an index prefix - see INDEX_SEPARATOR below - is read as numbered, and then a row that
@@ -306,8 +308,10 @@ function fillNumbered({ indices, bodies }, width, height) {
  * every repair that had to be made to get there.
  *
  * Why the repairs are safe, and the one direction they are allowed to be wrong in. A pad only ever adds
- * EMPTY. It cannot add ground, so it cannot bridge a pit the model left; it cannot add an object, so it
- * cannot put back a jar the model forgot. What it can do is leave a hole at the right-hand end of a
+ * EMPTY and a trim only ever removes it. Neither can add ground, so neither can bridge a pit the model
+ * left; neither can add an object, so neither can put back a jar the model forgot; and neither can take
+ * one away, because a trim that would have cut anything but empty air is a refusal instead. What a pad
+ * can do is leave a hole at the right-hand end of a
  * floor that was meant to run to the edge - and that makes the level harder, or unfinishable, never
  * easier. Padding fails closed. The padded grid then goes through the editor's own checks and the
  * reachability solver exactly as a hand-drawn one does, so a pad that broke the level is caught by the
@@ -338,9 +342,11 @@ function fillNumbered({ indices, bodies }, width, height) {
  *
  * @param size the size that was asked for, clamped here the same way the request was clamped, so what
  *   the model was told to write and what this checks can never be two different numbers.
- * @returns { level, pads } - pads is every place the reply was short and was filled with empty space,
- *   each one carrying the row, the two lengths and a sentence saying so. An empty array is a reply that
- *   arrived exactly as asked for. Callers destructure both: the pads are not optional to look at.
+ * @returns { level, pads } - pads is every place the reply did not arrive at the size it was asked for
+ *   and was made to fit with empty space: `added` cells where it was short, `trimmed` ones where it ran
+ *   past the end into nothing. Each carries the row, the two lengths and a sentence saying so. An empty
+ *   array is a reply that arrived exactly as asked for. Callers destructure both: the pads are not
+ *   optional to look at.
  */
 export function parseLayout(text, size) {
   const { width, height } = clampSize(size);
@@ -428,6 +434,40 @@ export function parseLayout(text, size) {
   // rather than one more attempt per row. The two ways a row can be wrong are refused for different
   // reasons, so they are named separately - the message is what the next attempt is taught from.
   const limit = Math.floor(width * PAD_TOLERANCE);
+
+  // An over-long row is refused because the characters cut off the end would be real content - unless
+  // they demonstrably would not be. A row whose excess is entirely EMPTY is over-long by empty air
+  // standing in columns the level does not have, and cutting that away cannot change a tile: it is the
+  // same argument that lets a short row be padded on the right, run in the other direction, and it is a
+  // stronger one. Padding a short row can leave a hole where ground was meant to be; trimming empty
+  // overhang is a no-op on the level itself.
+  //
+  // It is the excess that is looked at, never the row. One character of ground past the end is still a
+  // refusal, because then there really is content out there and no telling which of it was surplus.
+  //
+  // The same tolerance bounds it, for a reason that is about the row rather than the repair: an overhang
+  // wider than that is not a slip, it is a row drawn to a different width, and a row laid out for
+  // different columns is not made right by the fact that its content happens to fit inside these ones.
+  for (let index = 0; index < rows.length; index += 1) {
+    const over = rows[index].length - width;
+    if (over <= 0 || over > limit) continue;
+    if (![...rows[index].slice(width)].every((cell) => cell === EMPTY)) continue;
+
+    rows[index] = rows[index].slice(0, width);
+    pads.push({
+      where: 'width',
+      row: index,
+      trimmed: over,
+      was: width + over,
+      want: width,
+      message: `Row ${index} came in ${width + over} characters, ${over} over ${width}, and the `
+        + `${plural(over, 'extra character was', `${over} extra characters were`)} empty - so `
+        + `${plural(over, 'it was', 'they were')} cut from the right. ${plural(over, 'It stood', 'They stood')} `
+        + `in ${plural(over, 'a column', 'columns')} the level does not have, so nothing was lost with `
+        + `${plural(over, 'it', 'them')}.`,
+    });
+  }
+
   const measured = rows.map((row, index) => ({ index, length: row.length }));
   const tooLong = measured.filter((row) => row.length > width);
   const tooShort = measured.filter((row) => width - row.length > limit);
@@ -437,7 +477,9 @@ export function parseLayout(text, size) {
     if (tooLong.length > 0) {
       reasons.push(
         `${listRows(tooLong, (row) => `row ${row.index} is ${row.length}, ${row.length - width} over`)}`
-          + ' - a long row is never trimmed, because the characters cut off the end would be real content',
+          + ` - what is past ${width} is not all empty, or is more than ${limit} over (10% of ${width}), so it`
+          + ' is real content rather than air standing in columns that do not exist. A row is never trimmed'
+          + ' into content: there would be no telling which of it was surplus',
       );
     }
     if (tooShort.length > 0) {

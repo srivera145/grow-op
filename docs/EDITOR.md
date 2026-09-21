@@ -146,7 +146,9 @@ Widths, whichever way the reply is written — the prefix is off before anything
 | --- | --- |
 | a row short by up to 10% of the width | **padded on the right with empty space**, and reported |
 | a row short by more than that | refused, naming the row and both lengths |
-| a row longer than the width | refused, naming the row and the excess — never trimmed |
+| a row longer than the width, and what is past the end is **all empty** | **trimmed on the right**, and reported |
+| a row longer than the width, with anything else past the end | refused, naming the row and the excess |
+| a row longer by more than 10% of the width | refused, however empty the overhang |
 
 Rows, when the reply is numbered:
 
@@ -235,9 +237,20 @@ Those lines also go back with **Regenerate**, so a model that is consistently sh
 there is still a session left to correct it in. A level that was quietly repaired is a level that is
 subtly not the one on the screen, which is the one outcome worse than a refusal.
 
-A row that is *over* long is a different thing and is always refused: the characters that would be cut
-off the end are real content, and there is no way to know from here which of them was surplus. Too many
-rows is refused for the same reason. The refusal names every wrong row at once, not just the first.
+A row that is *over* long is decided by what is actually past the end. If the overhang is entirely
+empty, it is air standing in columns the level does not have, and cutting it away cannot change a tile —
+so it is cut, and reported like any other repair. This is the same argument that lets a short row be
+padded on the right, run in the other direction, and it is the stronger of the two: a pad can leave a
+hole where ground was meant to run to the edge, whereas trimming empty overhang is a no-op on the grid.
+
+If there is **anything else** out there — one tile of ground, one letter — it is refused, because then
+the characters that would be cut really are content and there is no way to know which of them was
+surplus. The same 10% bounds the trim, for a reason about the row rather than the repair: past that it
+is not a slip, it is a row drawn to a width this level does not have, and content that happens to fit
+inside these columns was not necessarily laid out for them.
+
+Too many rows is refused for the reason an over-long row *with content* is. The refusal names every
+wrong row at once, not just the first.
 
 ### What gets checked before it loads
 

@@ -235,14 +235,69 @@ check(
 );
 is(results, 'a refused layout is not padded at all', refusedShort.pads, []);
 
-const overLong = gapLevel(4).split('\n');
-overLong[4] = `${overLong[4]}..`;
-const refusedLong = await offer(overLong.join('\n'));
+/**
+ * An over-long row, and the one case where the overhang can be shown to be nothing.
+ *
+ * A row that ran past the end used to be refused whatever was out there, on the grounds that the
+ * characters cut off would be real content. When the overhang is entirely empty that is not true: those
+ * characters are air standing in columns the level does not have, and removing them cannot change a
+ * tile. It is the same argument that lets a short row be padded on the right, run the other way, and a
+ * stronger one - a pad can leave a hole where ground was meant to be, and a trim of empty air is a
+ * no-op on the grid. So the excess is what decides it, never the row.
+ */
+
+const overLongEmpty = gapLevel(4).split('\n');
+overLongEmpty[4] = `${overLongEmpty[4]}..`;
+const trimmed = await offer(overLongEmpty.join('\n'));
+check(results, 'a row over-long by empty air alone is trimmed, not thrown away', trimmed.ok, trimmed.problems.join(' | '));
 check(
   results,
-  'an over-long row is refused rather than trimmed',
-  !refusedLong.ok && refusedLong.problems.some((problem) => problem.includes('row 4 is 32, 2 over') && problem.includes('never trimmed')),
+  'and the trim says what was cut and why nothing was lost',
+  trimmed.pads.some((pad) => pad.includes('Row 4 came in 32 characters, 2 over 30')
+    && pad.includes('empty') && pad.includes('columns the level does not have')),
+  trimmed.pads.join(' | '),
+);
+is(results, 'the trimmed level has the ground the whole one had', trimmed.solid, crossable.solid);
+is(results, 'and every object where the whole one had it', trimmed.places, crossable.places);
+
+// One character of ground past the end and it is a refusal again. The rule is about what is out there,
+// so a row carrying real content past the width is still content nobody can say the surplus half of.
+const overLongSolid = gapLevel(4).split('\n');
+overLongSolid[4] = `${overLongSolid[4]}.#`;
+const refusedLong = await offer(overLongSolid.join('\n'));
+check(
+  results,
+  'an over-long row with anything but air past the end is still refused',
+  !refusedLong.ok && refusedLong.problems.some((problem) => problem.includes('row 4 is 32, 2 over') && problem.includes('not all empty')),
   refusedLong.problems.join(' | '),
+);
+is(results, 'and is not trimmed at all', refusedLong.pads, []);
+
+// The overhang is bounded by the same 10% as everything else, and for a reason about the row rather
+// than the repair: past that it is not a slip, it is a row drawn to a width this level does not have.
+const wildlyLong = gapLevel(4).split('\n');
+wildlyLong[4] = `${wildlyLong[4]}${'.'.repeat(4)}`;
+const refusedWide = await offer(wildlyLong.join('\n'));
+check(
+  results,
+  'an overhang past the tolerance is refused even when it is all empty',
+  !refusedWide.ok && refusedWide.problems.some((problem) => problem.includes('row 4 is 34, 4 over')),
+  refusedWide.problems.join(' | '),
+);
+
+// Both slips at once, in opposite directions, which is what a real reply did: one row a character over
+// and another a character short. Each is reported as itself.
+const bothWays = gapLevel(4).split('\n');
+bothWays[4] = `${bothWays[4]}.`;
+bothWays[6] = bothWays[6].slice(1);
+const mixed = await offer(bothWays.join('\n'));
+check(results, 'a reply that is long in one row and short in another is read', mixed.ok, mixed.problems.join(' | '));
+check(
+  results,
+  'with the trim and the pad reported separately',
+  mixed.pads.some((pad) => pad.includes('Row 4') && pad.includes('1 over 30'))
+    && mixed.pads.some((pad) => pad.includes('Row 6') && pad.includes('1 short of 30')),
+  mixed.pads.join(' | '),
 );
 
 // ---------------------------------------------------------------- rows, rather than characters
